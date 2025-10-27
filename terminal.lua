@@ -1,91 +1,35 @@
 local ffi = require("ffi")
 local terminal = {}
+local meta = {}
+meta.__index = meta
 
--- ============================================================================
--- Local utility functions to make this file portable
--- ============================================================================
-
--- UTF-8 utilities
-local utf8_local = {}
-
--- Convert Unicode code point to UTF-8 string
-function utf8_local.from_uint32(code)
-	if code == 0 then return "" end
-	
-	if code < 0x80 then
-		return string.char(code)
-	elseif code < 0x800 then
-		return string.char(
-			0xC0 + bit.rshift(code, 6),
-			0x80 + bit.band(code, 0x3F)
-		)
-	elseif code < 0x10000 then
-		return string.char(
-			0xE0 + bit.rshift(code, 12),
-			0x80 + bit.band(bit.rshift(code, 6), 0x3F),
-			0x80 + bit.band(code, 0x3F)
-		)
-	elseif code < 0x110000 then
-		return string.char(
-			0xF0 + bit.rshift(code, 18),
-			0x80 + bit.band(bit.rshift(code, 12), 0x3F),
-			0x80 + bit.band(bit.rshift(code, 6), 0x3F),
-			0x80 + bit.band(code, 0x3F)
-		)
-	end
-	
-	return ""
+function meta:SetTitle(str)
+	self:Write(string.format("\27[s\27[0;0f%s\27[u", str))
 end
 
--- Get byte length of UTF-8 character from its first byte
-function utf8_local.byte_length(c)
-	local byte = c:byte()
-	if byte < 0x80 then return 1
-	elseif byte < 0xE0 then return 2
-	elseif byte < 0xF0 then return 3
-	elseif byte < 0xF8 then return 4
-	else return nil end
+function meta:SetCaretPosition(x, y)
+	self:Write(string.format("\27[%i;%if", y, x))
 end
 
--- Convert table of flag names to combined flag value
-local function table_to_flags(tbl, flags_map, combiner)
-	local result = 0
-	for _, flag_name in ipairs(tbl) do
-		if flags_map[flag_name] then
-			result = combiner(result, flags_map[flag_name])
-		end
-	end
-	return result
+function meta:WriteStringToScreen(x, y, str)
+	self:Write(string.format("\27[s\27[%i;%if%s\27[u", y, x, str))
 end
 
--- Convert flag value to table of flag names
-local function flags_to_table(value, flags_map)
-	local result = {}
-	for name, flag_value in pairs(flags_map) do
-		if bit.band(value, flag_value) ~= 0 then
-			result[name] = true
-		end
-	end
-	return result
+function meta:ForegroundColor(r, g, b)
+	self:Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
 end
 
--- Math utilities
-local function math_clamp(value, min, max)
-	if value < min then return min end
-	if value > max then return max end
-	return value
+function meta:BackgroundColor(r, g, b)
+	self:Write(string.format("\27[48;2;%i;%i;%im", r, g, b))
 end
 
--- Warning/debug logging function
-local function wlog(format, ...)
-	-- Simple implementation that writes to stderr
-	io.stderr:write(string.format(format, ...) .. "\n")
+function meta:ResetColor()
+	self:Write("\27[0m")
 end
 
--- ============================================================================
--- End of utility functions
--- ============================================================================
-
+function meta:Clear()
+	self:Write("\27[2J\27[H")
+end
 
 if jit.os == "Windows" then
 	local STD_INPUT_HANDLE = -10
@@ -256,6 +200,19 @@ if jit.os == "Windows" then
 	local stdout = ffi.C.GetStdHandle(STD_OUTPUT_HANDLE)
 	local old_flags = {}
 
+	-- Convert table of flag names to combined flag value
+	local function table_to_flags(tbl, flags_map, combiner)
+		local result = 0
+
+		for _, flag_name in ipairs(tbl) do
+			if flags_map[flag_name] then
+				result = combiner(result, flags_map[flag_name])
+			end
+		end
+
+		return result
+	end
+
 	local function add_flags(handle, tbl)
 		local ptr = ffi.C.GetStdHandle(handle)
 
@@ -273,24 +230,15 @@ if jit.os == "Windows" then
 		if ffi.C.SetConsoleMode(ptr, flags[0]) == 0 then throw_error() end
 	end
 
-	local meta = {}
-	meta.__index = meta
-
 	function terminal.WrapFile(input, output)
 		io.stdin:setvbuf("no")
 		io.stdout:setvbuf("no")
-		
 		-- Set console to UTF-8 (code page 65001)
 		ffi.C.SetConsoleOutputCP(65001)
 		ffi.C.SetConsoleCP(65001)
-		
-		add_flags(
-			STD_INPUT_HANDLE,
-			{
-				"ENABLE_INSERT_MODE",
-			},
-			mode_flags
-		)
+		add_flags(STD_INPUT_HANDLE, {
+			"ENABLE_INSERT_MODE",
+		}, mode_flags)
 		add_flags(
 			STD_OUTPUT_HANDLE,
 			{
@@ -299,16 +247,16 @@ if jit.os == "Windows" then
 			},
 			mode_flags
 		)
-
-		local self = setmetatable({
-			input = input,
-			output = output,
-			suppress_first = true,
-			event_queue = {},
-		}, meta)
-
+		local self = setmetatable(
+			{
+				input = input,
+				output = output,
+				suppress_first = true,
+				event_queue = {},
+			},
+			meta
+		)
 		self:EnableCaret(true)
-
 		return self
 	end
 
@@ -342,7 +290,7 @@ if jit.os == "Windows" then
 
 		self.writing = true
 
-		if self.OnWrite and self.OnWrite(str) ~= false then 
+		if self.OnWrite and self.OnWrite(str) ~= false then
 			self.output:write(str)
 		end
 
@@ -355,16 +303,6 @@ if jit.os == "Windows" then
 		return out[0].dwCursorPosition.X + 1, out[0].dwCursorPosition.Y + 1
 	end
 
-	function meta:SetCaretPosition(x, y)
-		x = math.max(math.floor(x), 0)
-		y = math.max(math.floor(y), 0)
-		self:Write("\27[" .. y .. ";" .. x .. "f")
-	end
-
-	function meta:WriteStringToScreen(x, y, str)
-		self:Write("\27[s\27[" .. y .. ";" .. x .. "f" .. str .. "\27[u")
-	end
-
 	function meta:SetTitle(str)
 		ffi.C.SetConsoleTitleA(str)
 	end
@@ -373,28 +311,6 @@ if jit.os == "Windows" then
 		local out = ffi.new("struct CONSOLE_SCREEN_BUFFER_INFO[1]")
 		ffi.C.GetConsoleScreenBufferInfo(stdout, out)
 		return out[0].dwSize.X, out[0].dwSize.Y
-	end
-
-	function meta:ForegroundColor(r, g, b)
-		r = math.floor(r * 255)
-		g = math.floor(g * 255)
-		b = math.floor(b * 255)
-		self:Write("\27[38;2;" .. r .. ";" .. g .. ";" .. b .. "m")
-	end
-
-	function meta:ForegroundColorFast(r, g, b)
-		self:Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
-	end
-
-	function meta:BackgroundColor(r, g, b)
-		r = math.floor(r * 255)
-		g = math.floor(g * 255)
-		b = math.floor(b * 255)
-		self:Write("\27[48;2;" .. r .. ";" .. g .. ";" .. b .. "m")
-	end
-
-	function meta:ResetColor()
-		self:Write("\27[0m")
 	end
 
 	local keys = {
@@ -592,6 +508,43 @@ if jit.os == "Windows" then
 		end
 	end
 
+	-- Convert Unicode code point to UTF-8 string
+	local function utf8_from_uint32(code)
+		if code == 0 then return "" end
+
+		if code < 0x80 then
+			return string.char(code)
+		elseif code < 0x800 then
+			return string.char(0xC0 + bit.rshift(code, 6), 0x80 + bit.band(code, 0x3F))
+		elseif code < 0x10000 then
+			return string.char(
+				0xE0 + bit.rshift(code, 12),
+				0x80 + bit.band(bit.rshift(code, 6), 0x3F),
+				0x80 + bit.band(code, 0x3F)
+			)
+		elseif code < 0x110000 then
+			return string.char(
+				0xF0 + bit.rshift(code, 18),
+				0x80 + bit.band(bit.rshift(code, 12), 0x3F),
+				0x80 + bit.band(bit.rshift(code, 6), 0x3F),
+				0x80 + bit.band(code, 0x3F)
+			)
+		end
+
+		return ""
+	end
+
+	-- Convert flag value to table of flag names
+	local function flags_to_table(value, flags_map)
+		local result = {}
+
+		for name, flag_value in pairs(flags_map) do
+			if bit.band(value, flag_value) ~= 0 then result[name] = true end
+		end
+
+		return result
+	end
+
 	function meta:ReadEvent()
 		-- Fill the event queue if it's empty
 		if #self.event_queue == 0 then
@@ -604,10 +557,9 @@ if jit.os == "Windows" then
 					if evt.EventType == 1 then -- KEY_EVENT
 						if evt.Event.KeyEvent.bKeyDown == 1 then
 							local unicode_char = evt.Event.KeyEvent.uChar.UnicodeChar
-							local str = utf8_local.from_uint32(unicode_char)
+							local str = utf8_from_uint32(unicode_char)
 							local key_code = evt.Event.KeyEvent.wVirtualKeyCode
 							local mod = flags_to_table(evt.Event.KeyEvent.dwControlKeyState, modifiers)
-							
 							local ctrl = mod.LEFT_CTRL_PRESSED or mod.RIGHT_CTRL_PRESSED
 							local shift = mod.SHIFT_PRESSED
 							local alt = mod.LEFT_ALT_PRESSED or mod.RIGHT_ALT_PRESSED
@@ -626,7 +578,7 @@ if jit.os == "Windows" then
 									ctrl = ctrl,
 									shift = shift,
 									alt = alt,
-								}
+								},
 							}
 
 							-- Determine the key name
@@ -663,7 +615,11 @@ if jit.os == "Windows" then
 							elseif evt.Event.KeyEvent.uChar.UnicodeChar > 31 then
 								-- Printable character
 								event.key = str
-							elseif ctrl and evt.Event.KeyEvent.uChar.UnicodeChar >= 1 and evt.Event.KeyEvent.uChar.UnicodeChar <= 26 then
+							elseif
+								ctrl and
+								evt.Event.KeyEvent.uChar.UnicodeChar >= 1 and
+								evt.Event.KeyEvent.uChar.UnicodeChar <= 26
+							then
 								-- Ctrl+letter combinations
 								event.key = string.char(evt.Event.KeyEvent.uChar.UnicodeChar + 96)
 							else
@@ -681,9 +637,7 @@ if jit.os == "Windows" then
 		end
 
 		-- Return the first event from the queue
-		if #self.event_queue > 0 then
-			return table.remove(self.event_queue, 1)
-		end
+		if #self.event_queue > 0 then return table.remove(self.event_queue, 1) end
 
 		return nil
 	end
@@ -692,14 +646,13 @@ else
 
 	local function lasterror(num)
 		num = num or ffi.errno()
-
 		local err = ffi.string(ffi.C.strerror(num))
 		err = err == "" and tostring(num) or err
-
 		return err, num
 	end
 
 	local termios
+
 	if jit.os ~= "OSX" then
 		termios = ffi.typeof([[
             struct
@@ -729,7 +682,8 @@ else
         ]])
 	end
 
-	ffi.cdef([[
+	ffi.cdef(
+		[[
         int tcgetattr(int, $ *);
         int tcsetattr(int, int, const $ *);
 
@@ -740,8 +694,10 @@ else
         int fileno(void *stream);
 
         int ferror(void*stream);
-    ]], termios, termios)
-
+    ]],
+		termios,
+		termios
+	)
 	local VMIN = 6
 	local VTIME = 5
 	local TCSANOW = 0
@@ -767,9 +723,9 @@ else
 			TOSTOP = 256,
 			ISIG = 1,
 			-- c_iflag (input flags)
-			IXON = 0x00000400,   -- Enable XON/XOFF flow control on output
-			IXOFF = 0x00001000,  -- Enable XON/XOFF flow control on input
-			IXANY = 0x00000800,  -- Allow any char to restart output
+			IXON = 0x00000400, -- Enable XON/XOFF flow control on output
+			IXOFF = 0x00001000, -- Enable XON/XOFF flow control on input
+			IXANY = 0x00000800, -- Allow any char to restart output
 		}
 	else
 		VMIN = 16
@@ -794,26 +750,20 @@ else
 			PENDIN = 0x20000000,
 			NOFLSH = 0x80000000,
 			-- c_iflag (input flags)
-			IXON = 0x00000200,   -- Enable XON/XOFF flow control on output
-			IXOFF = 0x00000400,  -- Enable XON/XOFF flow control on input
-			IXANY = 0x00000800,  -- Allow any char to restart output
+			IXON = 0x00000200, -- Enable XON/XOFF flow control on output
+			IXOFF = 0x00000400, -- Enable XON/XOFF flow control on input
+			IXANY = 0x00000800, -- Allow any char to restart output
 		}
 	end
-
-	local meta = {}
-	meta.__index = meta
 
 	local termios_boxed = ffi.typeof("$[1]", termios)
 
 	function terminal.WrapFile(input, output)
 		local fd_no = ffi.C.fileno(input)
-
 		input:setvbuf("no")
 		output:setvbuf("no")
-
 		local old_attributes = termios_boxed()
 		ffi.C.tcgetattr(fd_no, old_attributes)
-
 		local attr = termios_boxed()
 
 		if ffi.C.tcgetattr(fd_no, attr) ~= 0 then error(lasterror(), 2) end
@@ -833,19 +783,17 @@ else
 				)
 			)
 		)
-		
 		-- Disable XON/XOFF flow control (allows Ctrl+S and Ctrl+Q to work)
 		attr[0].c_iflag = bit.band(
 			tonumber(attr[0].c_iflag),
 			bit.bnot(
 				bit.bor(
-					flags.IXON,   -- Disable output flow control
-					flags.IXOFF,  -- Disable input flow control
-					flags.IXANY   -- Disable restart on any char
+					flags.IXON, -- Disable output flow control
+					flags.IXOFF, -- Disable input flow control
+					flags.IXANY -- Disable restart on any char
 				)
 			)
 		)
-		
 		attr[0].c_cc[VMIN] = 0
 		attr[0].c_cc[VTIME] = 0
 
@@ -853,11 +801,14 @@ else
 
 		if ffi.C.tcgetattr(fd_no, attr) ~= 0 then error(lasterror(), 2) end
 
-		local self = setmetatable({
-			input = input,
-			output = output,
-			old_attributes = old_attributes,
-		}, meta)
+		local self = setmetatable(
+			{
+				input = input,
+				output = output,
+				old_attributes = old_attributes,
+			},
+			meta
+		)
 
 		if attr[0].c_cc[VMIN] ~= 0 or attr[0].c_cc[VTIME] ~= 0 then
 			self:__gc()
@@ -874,26 +825,28 @@ else
 			unsigned short int ws_xpixel;
 			unsigned short int ws_ypixel;
 		}]])
-
 		ffi.cdef("int ioctl(int fd, unsigned long int req, ...);")
-
 		local TIOCGWINSZ = 0x5413
 
 		if jit.os == "OSX" then TIOCGWINSZ = 0x40087468 end
 
-		local size = ffi.typeof("$[1]", ffi.typeof("$", winsize))
+		local size = ffi.typeof("$[1]", ffi.typeof("$", winsize))()
 
 		function meta:GetSize()
 			local fd_no = ffi.C.fileno(self.output)
 			local num = ffi.C.ioctl(fd_no, TIOCGWINSZ, size)
+
 			if num ~= 0 then error(lasterror(), 2) end
+
 			return size[0].ws_col, size[0].ws_row
 		end
 	end
 
 	function meta:Read()
 		local char = self.input:read(1)
+
 		if char == "" then return nil end
+
 		return char
 	end
 
@@ -904,19 +857,14 @@ else
 	function meta:__gc()
 		local fd_no = ffi.C.fileno(self.output)
 		local num = ffi.C.tcsetattr(fd_no, TCSANOW, self.old_attributes)
-		if num ~= 0 then wlog("terminal:__gc: unable to restore terminal attributes: %s", lasterror()) end
+
+		if num ~= 0 then
+			print("terminal:__gc: unable to restore terminal attributes: %s", lasterror())
+		end
 	end
 
-	function meta:EnableCaret(b) 
+	function meta:EnableCaret(b)
 		error("not implemented on this platform")
-	end
-
-	function meta:SetTitle(str)
-		self:Write(string.format("\27[s\27[0;0f%s\27[u", str))
-	end
-
-	function meta:SetCaretPosition(x, y)
-		self:Write(string.format("\27[%i;%if", y, x))
 	end
 
 	do
@@ -944,27 +892,11 @@ else
 		end
 	end
 
-	function meta:WriteStringToScreen(x, y, str)
-		self:Write(string.format("\27[s\27[%i;%if%s\27[u", y, x, str))
-	end
-
-	function meta:ForegroundColor(r, g, b)
-		self:Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
-	end
-
-	function meta:BackgroundColor(r, g, b)
-		self:Write(string.format("\27[48;2;%i;%i;%im", r, g, b))
-	end
-
-	function meta:ResetColor()
-		self:Write("\27[0m")
-	end
-
 	-- Escape sequence parser for macOS
 	local escape_buffer = ""
 	local escape_sequences = {
 		["\27[A"] = "up",
-		["\27[B"] = "down", 
+		["\27[B"] = "down",
 		["\27[C"] = "right",
 		["\27[D"] = "left",
 		["\27[H"] = "home",
@@ -986,13 +918,19 @@ else
 		["\27[23~"] = "f11",
 		["\27[24~"] = "f12",
 	}
-
 	-- CSI sequences with modifiers: \x1b[1;MODIFIERkey
 	-- Modifier codes: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt
 	local csi_keys = {
-		A = "up", B = "down", C = "right", D = "left",
-		H = "home", F = "end",
-		P = "f1", Q = "f2", R = "f3", S = "f4",
+		A = "up",
+		B = "down",
+		C = "right",
+		D = "left",
+		H = "home",
+		F = "end",
+		P = "f1",
+		Q = "f2",
+		R = "f3",
+		S = "f4",
 	}
 
 	local function decode_modifier(mod_code)
@@ -1001,46 +939,61 @@ else
 			shift = false,
 			alt = false,
 		}
-		
+
 		if mod_code >= 5 then
 			modifiers.ctrl = true
 			mod_code = mod_code - 4
 		end
-		
+
 		if mod_code >= 3 then
 			modifiers.alt = true
 			mod_code = mod_code - 2
 		end
-		
-		if mod_code >= 2 then
-			modifiers.shift = true
-		end
-		
+
+		if mod_code >= 2 then modifiers.shift = true end
+
 		return modifiers
+	end
+
+	-- Get byte length of UTF-8 character from its first byte
+	local function utf8_byte_length(c)
+		local byte = c:byte()
+
+		if byte < 0x80 then
+			return 1
+		elseif byte < 0xE0 then
+			return 2
+		elseif byte < 0xF0 then
+			return 3
+		elseif byte < 0xF8 then
+			return 4
+		else
+			return nil
+		end
 	end
 
 	function meta:ReadEvent()
 		local char = self:Read()
 
-		if not char then
-			return nil
-		end
+		if not char then return nil end
 
 		-- Handle escape sequences
 		if char == "\27" then
 			escape_buffer = "\27"
-			
+
 			while true do
 				local next_char = self:Read()
+
 				if not next_char then break end
+
 				escape_buffer = escape_buffer .. next_char
-				
 				-- Check for CSI sequence with modifiers: \x1b[1;MODkey or \x1b[MODkey
 				local mod_code, key_char = escape_buffer:match("^\27%[1;(%d+)([A-Z])$")
+
 				if not mod_code then
 					mod_code, key_char = escape_buffer:match("^\27%[(%d+)([A-Z])$")
 				end
-				
+
 				if mod_code and key_char and csi_keys[key_char] then
 					local modifiers = decode_modifier(tonumber(mod_code))
 					return {
@@ -1048,54 +1001,53 @@ else
 						modifiers = modifiers,
 					}
 				end
-				
+
 				-- Check for complete escape sequence
 				if escape_sequences[escape_buffer] then
 					return {
 						key = escape_sequences[escape_buffer],
-						modifiers = { ctrl = false, shift = false, alt = false },
+						modifiers = {ctrl = false, shift = false, alt = false},
 					}
 				end
-				
+
 				-- Check if it's a tilde-terminated sequence
-				if escape_buffer:match("~$") then
-					break
-				end
-				
+				if escape_buffer:match("~$") then break end
+
 				-- Check if it's a letter-terminated CSI sequence
-				if escape_buffer:match("^\27%[[%d;]*[A-Z]$") then
-					break
-				end
-				
+				if escape_buffer:match("^\27%[[%d;]*[A-Z]$") then break end
+
 				-- Check if it's an SS3 sequence (alt sequences)
-				if escape_buffer:match("^\27O[A-Z]$") then
-					break
-				end
+				if escape_buffer:match("^\27O[A-Z]$") then break end
 			end
-			
+
 			-- Alt + key combinations (ESC followed by regular character)
-			if #escape_buffer == 2 and escape_buffer:byte(2) >= 32 and escape_buffer:byte(2) <= 126 then
+			if
+				#escape_buffer == 2 and
+				escape_buffer:byte(2) >= 32 and
+				escape_buffer:byte(2) <= 126
+			then
 				return {
 					key = escape_buffer:sub(2, 2),
-					modifiers = { ctrl = false, shift = false, alt = true },
+					modifiers = {ctrl = false, shift = false, alt = true},
 				}
 			end
-			
+
 			-- Unknown or incomplete escape sequence
 			escape_buffer = ""
 			return {
 				key = "escape",
-				modifiers = { ctrl = false, shift = false, alt = false },
+				modifiers = {ctrl = false, shift = false, alt = false},
 			}
 		end
 
 		-- Handle control characters (Ctrl+A through Ctrl+Z)
 		local byte = char:byte()
+
 		if byte >= 1 and byte <= 26 then
 			local key = string.char(byte + 96) -- Convert to lowercase letter
 			return {
 				key = key,
-				modifiers = { ctrl = true, shift = false, alt = false },
+				modifiers = {ctrl = true, shift = false, alt = false},
 			}
 		end
 
@@ -1103,17 +1055,17 @@ else
 		if byte == 127 or byte == 8 then -- DEL or backspace
 			return {
 				key = "backspace",
-				modifiers = { ctrl = false, shift = false, alt = false },
+				modifiers = {ctrl = false, shift = false, alt = false},
 			}
 		elseif byte == 9 then -- Tab
 			return {
 				key = "tab",
-				modifiers = { ctrl = false, shift = false, alt = false },
+				modifiers = {ctrl = false, shift = false, alt = false},
 			}
 		elseif byte == 13 or byte == 10 then -- Enter
 			return {
 				key = "enter",
-				modifiers = { ctrl = false, shift = false, alt = false },
+				modifiers = {ctrl = false, shift = false, alt = false},
 			}
 		end
 
@@ -1121,23 +1073,25 @@ else
 		if byte >= 32 and byte <= 126 then
 			return {
 				key = char,
-				modifiers = { ctrl = false, shift = false, alt = false },
+				modifiers = {ctrl = false, shift = false, alt = false},
 			}
 		end
 
 		-- UTF-8 multi-byte character
-		local len = utf8_local.byte_length(char)
+		local len = utf8_byte_length(char)
+
 		if len and len > 1 then
 			local full_char = char
+
 			for i = 2, len do
 				local next = self:Read()
-				if next then
-					full_char = full_char .. next
-				end
+
+				if next then full_char = full_char .. next end
 			end
+
 			return {
 				key = full_char,
-				modifiers = { ctrl = false, shift = false, alt = false },
+				modifiers = {ctrl = false, shift = false, alt = false},
 			}
 		end
 
