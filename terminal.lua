@@ -31,9 +31,20 @@ function meta:Clear()
 	self:Write("\27[2J\27[3J\27[H")
 end
 
+function meta:UseAlternateScreen(enable)
+	if enable then
+		self:Write("\27[?1049h")  -- Switch to alternate screen
+	else
+		self:Write("\27[?1049l")  -- Switch back to main screen
+	end
+end
+
+function meta:Flush()
+	self.output:flush()
+end
+
 function meta:Write(str)
 	self.output:write(str)
-	self.output:flush()
 end
 
 if jit.os == "Windows" then

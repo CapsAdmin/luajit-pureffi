@@ -4,6 +4,9 @@ local terminal = require("terminal")
 -- Initialize terminal
 local term = terminal.WrapFile(io.stdin, io.stdout)
 
+-- Use alternate screen buffer (no scrollback, cleaner)
+term:UseAlternateScreen(true)
+
 -- Thread worker function - computes Game of Life for assigned rows
 local function worker(input)
     local start_row = input.start_row
@@ -81,10 +84,8 @@ for i = 1, num_threads do
 end
 
 -- Display function using terminal module
-local function display_grid(g, generation, w, h, tw, th)
-    term:Clear()
+local function display_grid(g, generation, w, h, tw, th)    
     term:SetCaretPosition(1, 1)
-    
     -- Header
     term:ForegroundColor(0.5, 0.8, 1.0)
     term:Write("Generation: " .. generation .. " | Size: " .. tw .. "x" .. th .. " | Ctrl+C to exit")
@@ -119,7 +120,6 @@ local function display_grid(g, generation, w, h, tw, th)
     end
     
     -- Footer
-    term:ResetColor()
     term:Write(string.rep("─", w * 2))
     term:Write("\n")
 end
@@ -215,6 +215,7 @@ while not should_exit do
 end
 
 -- Cleanup
+term:UseAlternateScreen(false)  -- Restore main screen
 term:Clear()
 --term:EnableCaret(true)
 term:SetCaretPosition(1, 1)
