@@ -33,9 +33,9 @@ end
 
 function meta:UseAlternateScreen(enable)
 	if enable then
-		self:Write("\27[?1049h")  -- Switch to alternate screen
+		self:Write("\27[?1049h") -- Switch to alternate screen
 	else
-		self:Write("\27[?1049l")  -- Switch back to main screen
+		self:Write("\27[?1049l") -- Switch back to main screen
 	end
 end
 
@@ -43,8 +43,58 @@ function meta:Flush()
 	self.output:flush()
 end
 
+function meta:BeginFrame()
+	self._frame_buffer = {}
+end
+
+function meta:EndFrame()
+	if self._frame_buffer then
+		local buffer = table.concat(self._frame_buffer)
+		self._frame_buffer = nil
+		self.output:write(buffer)
+		self.output:flush()
+	end
+end
+
 function meta:Write(str)
-	self.output:write(str)
+	if self._frame_buffer then
+		table.insert(self._frame_buffer, str)
+	else
+		self.output:write(str)
+	end
+end
+
+function meta:EnableCaret(b)
+	if b then
+		self:Write("\27[?25h") -- Show cursor
+	else
+		self:Write("\27[?25l") -- Hide cursor
+	end
+end
+
+do
+	local function read_coordinates()
+		while true do
+			local str = terminal.Read()
+
+			if str then
+				local a, b = str:match("^\27%[(%d+);(%d+)R$")
+
+				if a then return tonumber(a), tonumber(b) end
+			end
+		end
+	end
+
+	local _x, _y = 0, 0
+
+	function meta:GetCaretPosition()
+		self:Write("\x1b[6n")
+		local y, x = read_coordinates()
+
+		if y then _x, _y = x, y end
+
+		return _x, _y
+	end
 end
 
 if jit.os == "Windows" then
@@ -214,7 +264,6 @@ if jit.os == "Windows" then
 	}
 	local stdin = ffi.C.GetStdHandle(STD_INPUT_HANDLE)
 	local stdout = ffi.C.GetStdHandle(STD_OUTPUT_HANDLE)
-	local old_flags = {}
 
 	-- Convert table of flag names to combined flag value
 	local function table_to_flags(tbl, flags_map, combiner)
@@ -237,25 +286,28 @@ if jit.os == "Windows" then
 		local flags = ffi.new("uint16_t[1]")
 
 		if ffi.C.GetConsoleMode(ptr, flags) == 0 then throw_error() end
-
-		old_flags[handle] = tonumber(flags[0])
+		local old_flags = tonumber(flags[0])
 		flags[0] = table_to_flags(tbl, mode_flags, function(out, val)
 			return bit.bor(out, val)
 		end)
 
 		if ffi.C.SetConsoleMode(ptr, flags[0]) == 0 then throw_error() end
+
+		return old_flags
 	end
 
 	function terminal.WrapFile(input, output)
-		io.stdin:setvbuf("no")
-		io.stdout:setvbuf("no")
+		input:setvbuf("no")
+		output:setvbuf("no")
 		-- Set console to UTF-8 (code page 65001)
 		ffi.C.SetConsoleOutputCP(65001)
 		ffi.C.SetConsoleCP(65001)
-		add_flags(STD_INPUT_HANDLE, {
+
+		local old_flags_input = add_flags(STD_INPUT_HANDLE, {
 			"ENABLE_INSERT_MODE",
 		}, mode_flags)
-		add_flags(
+
+		local old_flags_output = add_flags(
 			STD_OUTPUT_HANDLE,
 			{
 				"ENABLE_PROCESSED_INPUT",
@@ -267,8 +319,9 @@ if jit.os == "Windows" then
 			{
 				input = input,
 				output = output,
-				suppress_first = true,
 				event_queue = {},
+				old_flags_input = old_flags_input,
+				old_flags_output = old_flags_output,
 			},
 			meta
 		)
@@ -276,39 +329,17 @@ if jit.os == "Windows" then
 		return self
 	end
 
-	local function revert_flags(handle)
+	local function revert_flags(handle, old_flags)
 		local ptr = ffi.C.GetStdHandle(handle)
 
 		if ptr == nil then throw_error() end
 
-		if ffi.C.SetConsoleMode(ptr, old_flags[handle]) == 0 then throw_error() end
+		if ffi.C.SetConsoleMode(ptr, old_flags) == 0 then throw_error() end
 	end
 
 	function meta:__gc()
-		revert_flags(STD_INPUT_HANDLE)
-		revert_flags(STD_OUTPUT_HANDLE)
-	end
-
-	function meta:EnableCaret(b)
-		if
-			ffi.C.SetConsoleCursorInfo(
-				stdout,
-				ffi.new("struct CONSOLE_CURSOR_INFO[1]", {{dwSize = 100, bVisible = b and 1 or 0}})
-			) ~= 0
-		then
-
-		--error(throw_error())
-		end
-	end
-
-	function meta:GetCaretPosition()
-		local out = ffi.new("struct CONSOLE_SCREEN_BUFFER_INFO[1]")
-		ffi.C.GetConsoleScreenBufferInfo(stdout, out)
-		return out[0].dwCursorPosition.X + 1, out[0].dwCursorPosition.Y + 1
-	end
-
-	function meta:SetTitle(str)
-		ffi.C.SetConsoleTitleA(str)
+		revert_flags(STD_INPUT_HANDLE, self.old_flags_input)
+		revert_flags(STD_OUTPUT_HANDLE, self.old_flags_output)
 	end
 
 	function meta:GetSize()
@@ -501,11 +532,6 @@ if jit.os == "Windows" then
 
 			if ffi.C.ReadConsoleInputW(stdin, rec, events[0], events) == 0 then
 				error(throw_error())
-			end
-
-			if self.suppress_first then
-				self.suppress_first = false
-				return
 			end
 
 			return rec, events[0]
@@ -860,35 +886,6 @@ else
 
 		if num ~= 0 then
 			print("terminal:__gc: unable to restore terminal attributes: %s", lasterror())
-		end
-	end
-
-	function meta:EnableCaret(b)
-		error("not implemented on this platform")
-	end
-
-	do
-		local function read_coordinates()
-			while true do
-				local str = terminal.Read()
-
-				if str then
-					local a, b = str:match("^\27%[(%d+);(%d+)R$")
-
-					if a then return tonumber(a), tonumber(b) end
-				end
-			end
-		end
-
-		local _x, _y = 0, 0
-
-		function meta:GetCaretPosition()
-			self:Write("\x1b[6n")
-			local y, x = read_coordinates()
-
-			if y then _x, _y = x, y end
-
-			return _x, _y
 		end
 	end
 

@@ -84,7 +84,9 @@ for i = 1, num_threads do
 end
 
 -- Display function using terminal module
-local function display_grid(g, generation, w, h, tw, th)    
+local function display_grid(g, generation, w, h, tw, th)
+    term:BeginFrame()  -- Start buffering
+    
     term:SetCaretPosition(1, 1)
     -- Header
     term:ForegroundColor(0.5, 0.8, 1.0)
@@ -122,6 +124,8 @@ local function display_grid(g, generation, w, h, tw, th)
     -- Footer
     term:Write(string.rep("─", w * 2))
     term:Write("\n")
+    
+    term:EndFrame()  -- Flush all at once
 end
 
 -- Check for Ctrl+C
@@ -132,7 +136,7 @@ local generation = 0
 local last_width, last_height = term_width, term_height
 
 -- Hide cursor for cleaner display
---term:EnableCaret(false)
+term:EnableCaret(false)
 
 while not should_exit do
     -- Check for terminal resize
@@ -217,7 +221,7 @@ end
 -- Cleanup
 term:UseAlternateScreen(false)  -- Restore main screen
 term:Clear()
---term:EnableCaret(true)
+term:EnableCaret(true)
 term:SetCaretPosition(1, 1)
 term:ResetColor()
 term:Write("Game of Life ended. Goodbye!\n")
