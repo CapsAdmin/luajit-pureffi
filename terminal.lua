@@ -142,14 +142,14 @@ if jit.os == "Windows" then
 	};
 
 
-	int PeekConsoleInputA(
+	int PeekConsoleInputW(
 		void* hConsoleInput,
 		struct INPUT_RECORD* lpBuffer,
 		unsigned long nLength,
 		unsigned long * lpNumberOfEventsRead
 	);
 
-	int ReadConsoleInputA(
+	int ReadConsoleInputW(
 		void* hConsoleInput,
 		struct INPUT_RECORD* lpBuffer,
 		unsigned long nLength,
@@ -197,6 +197,8 @@ if jit.os == "Windows" then
 	int GetConsoleMode(void*, uint16_t*);
 	void* GetStdHandle(unsigned long nStdHandle);
 	int SetConsoleTitleA(const char*);
+	int SetConsoleOutputCP(unsigned int wCodePageID);
+	int SetConsoleCP(unsigned int wCodePageID);
 
 	uint32_t GetLastError();
 
@@ -277,6 +279,10 @@ if jit.os == "Windows" then
 	function terminal.WrapFile(input, output)
 		io.stdin:setvbuf("no")
 		io.stdout:setvbuf("no")
+		
+		-- Set console to UTF-8 (code page 65001)
+		ffi.C.SetConsoleOutputCP(65001)
+		ffi.C.SetConsoleCP(65001)
 		
 		add_flags(
 			STD_INPUT_HANDLE,
@@ -566,14 +572,14 @@ if jit.os == "Windows" then
 		local events = ffi.new("unsigned long[1]")
 		local rec = ffi.new("struct INPUT_RECORD[128]")
 
-		if ffi.C.PeekConsoleInputA(stdin, rec, 128, events) == 0 then
+		if ffi.C.PeekConsoleInputW(stdin, rec, 128, events) == 0 then
 			error(throw_error())
 		end
 
 		if events[0] > 0 then
 			local rec = ffi.new("struct INPUT_RECORD[?]", events[0])
 
-			if ffi.C.ReadConsoleInputA(stdin, rec, events[0], events) == 0 then
+			if ffi.C.ReadConsoleInputW(stdin, rec, events[0], events) == 0 then
 				error(throw_error())
 			end
 
@@ -597,7 +603,8 @@ if jit.os == "Windows" then
 
 					if evt.EventType == 1 then -- KEY_EVENT
 						if evt.Event.KeyEvent.bKeyDown == 1 then
-							local str = utf8_local.from_uint32(evt.Event.KeyEvent.uChar.UnicodeChar)
+							local unicode_char = evt.Event.KeyEvent.uChar.UnicodeChar
+							local str = utf8_local.from_uint32(unicode_char)
 							local key_code = evt.Event.KeyEvent.wVirtualKeyCode
 							local mod = flags_to_table(evt.Event.KeyEvent.dwControlKeyState, modifiers)
 							
