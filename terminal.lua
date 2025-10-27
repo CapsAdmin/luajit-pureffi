@@ -28,7 +28,12 @@ function meta:ResetColor()
 end
 
 function meta:Clear()
-	self:Write("\27[2J\27[H")
+	self:Write("\27[2J\27[3J\27[H")
+end
+
+function meta:Write(str)
+	self.output:write(str)
+	self.output:flush()
 end
 
 if jit.os == "Windows" then
@@ -283,18 +288,6 @@ if jit.os == "Windows" then
 
 		--error(throw_error())
 		end
-	end
-
-	function meta:Write(str)
-		if self.writing then return end
-
-		self.writing = true
-
-		if self.OnWrite and self.OnWrite(str) ~= false then
-			self.output:write(str)
-		end
-
-		self.writing = false
 	end
 
 	function meta:GetCaretPosition()
@@ -848,10 +841,6 @@ else
 		if char == "" then return nil end
 
 		return char
-	end
-
-	function meta:Write(str)
-		self.output:write(str)
 	end
 
 	function meta:__gc()

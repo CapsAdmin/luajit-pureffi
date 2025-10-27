@@ -92,14 +92,26 @@ local function display_grid(g, generation, w, h, tw, th)
     term:Write("\n")
     term:Write(string.rep("─", w * 2) .. "\n")
     
-    -- Grid
+    -- Grid - with safety checks
     for y = 1, h do
-        for x = 1, w do
-            if g[y][x] == 1 then
-                term:ForegroundColor(50, 255, 76)  -- Green for alive cells
-                term:Write("██")
-            else
-                term:ForegroundColor(25, 25, 25)  -- Dark for dead cells
+        if g[y] then
+            for x = 1, w do
+                if g[y][x] == 1 then
+                    term:ForegroundColor(50, 255, 76)  -- Green for alive cells
+                    term:Write("██")
+                elseif g[y][x] == 0 then
+                    term:ForegroundColor(25, 25, 25)  -- Dark for dead cells
+                    term:Write("··")
+                else
+                    -- Cell doesn't exist, show as dead
+                    term:ForegroundColor(25, 25, 25)
+                    term:Write("··")
+                end
+            end
+        else
+            -- Row doesn't exist, fill with dead cells
+            term:ForegroundColor(25, 25, 25)
+            for x = 1, w do
                 term:Write("··")
             end
         end
@@ -130,6 +142,11 @@ while not should_exit do
         term_width, term_height = new_width, new_height
         width = math.floor(term_width / 2) - 1
         height = term_height - 4
+        
+        -- Ensure dimensions are valid
+        if width < 1 then width = 1 end
+        if height < 1 then height = 1 end
+        
         grid = create_grid(width, height)
         generation = 0
         last_width, last_height = new_width, new_height
@@ -138,6 +155,11 @@ while not should_exit do
         for i = 1, num_threads do
             thread_pool[i] = threads.new(worker)
         end
+        
+        -- Display the new grid and skip to next iteration
+        -- This prevents running threads with mismatched dimensions
+        display_grid(grid, generation, width, height, term_width, term_height)
+        goto continue
     end
     
     display_grid(grid, generation, width, height, term_width, term_height)
@@ -168,15 +190,28 @@ while not should_exit do
     
     -- Collect results and assemble new grid
     local new_grid = {}
+    -- Pre-initialize all rows
+    for y = 1, height do
+        new_grid[y] = {}
+        for x = 1, width do
+            new_grid[y][x] = 0  -- Default to dead cells
+        end
+    end
+    
+    -- Collect thread results
     for i = 1, num_threads do
         local result = thread_pool[i]:join()
-        for y, row in pairs(result) do
-            new_grid[y] = row
+        if result then
+            for y, row in pairs(result) do
+                new_grid[y] = row
+            end
         end
     end
     
     grid = new_grid
     generation = generation + 1
+    
+    ::continue::
 end
 
 -- Cleanup
