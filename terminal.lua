@@ -1,6 +1,92 @@
 local ffi = require("ffi")
 local terminal = {}
 
+-- ============================================================================
+-- Local utility functions to make this file portable
+-- ============================================================================
+
+-- UTF-8 utilities
+local utf8_local = {}
+
+-- Convert Unicode code point to UTF-8 string
+function utf8_local.from_uint32(code)
+	if code == 0 then return "" end
+	
+	if code < 0x80 then
+		return string.char(code)
+	elseif code < 0x800 then
+		return string.char(
+			0xC0 + bit.rshift(code, 6),
+			0x80 + bit.band(code, 0x3F)
+		)
+	elseif code < 0x10000 then
+		return string.char(
+			0xE0 + bit.rshift(code, 12),
+			0x80 + bit.band(bit.rshift(code, 6), 0x3F),
+			0x80 + bit.band(code, 0x3F)
+		)
+	elseif code < 0x110000 then
+		return string.char(
+			0xF0 + bit.rshift(code, 18),
+			0x80 + bit.band(bit.rshift(code, 12), 0x3F),
+			0x80 + bit.band(bit.rshift(code, 6), 0x3F),
+			0x80 + bit.band(code, 0x3F)
+		)
+	end
+	
+	return ""
+end
+
+-- Get byte length of UTF-8 character from its first byte
+function utf8_local.byte_length(c)
+	local byte = c:byte()
+	if byte < 0x80 then return 1
+	elseif byte < 0xE0 then return 2
+	elseif byte < 0xF0 then return 3
+	elseif byte < 0xF8 then return 4
+	else return nil end
+end
+
+-- Convert table of flag names to combined flag value
+local function table_to_flags(tbl, flags_map, combiner)
+	local result = 0
+	for _, flag_name in ipairs(tbl) do
+		if flags_map[flag_name] then
+			result = combiner(result, flags_map[flag_name])
+		end
+	end
+	return result
+end
+
+-- Convert flag value to table of flag names
+local function flags_to_table(value, flags_map)
+	local result = {}
+	for name, flag_value in pairs(flags_map) do
+		if bit.band(value, flag_value) ~= 0 then
+			result[name] = true
+		end
+	end
+	return result
+end
+
+-- Math utilities
+local function math_clamp(value, min, max)
+	if value < min then return min end
+	if value > max then return max end
+	return value
+end
+
+-- Warning/debug logging function
+local function wlog(format, ...)
+	-- Simple implementation that writes to stderr
+	io.stderr:write(string.format(format, ...) .. "\n")
+end
+
+-- ============================================================================
+-- End of utility functions
+-- ============================================================================
+
+
 if jit.os == "Windows" then
 	local STD_INPUT_HANDLE = -10
 	local STD_OUTPUT_HANDLE = -11
@@ -178,48 +264,46 @@ if jit.os == "Windows" then
 		if ffi.C.GetConsoleMode(ptr, flags) == 0 then throw_error() end
 
 		old_flags[handle] = tonumber(flags[0])
-		flags[0] = utility.TableToFlags(tbl, mode_flags, function(out, val)
+		flags[0] = table_to_flags(tbl, mode_flags, function(out, val)
 			return bit.bor(out, val)
 		end)
 
 		if ffi.C.SetConsoleMode(ptr, flags[0]) == 0 then throw_error() end
 	end
 
-	function terminal.Initialize()
+	local meta = {}
+	meta.__index = meta
+
+	function terminal.WrapFile(input, output)
 		io.stdin:setvbuf("no")
 		io.stdout:setvbuf("no")
+		
 		add_flags(
 			STD_INPUT_HANDLE,
 			{
-				--"ENABLE_PROCESSED_OUTPUT",
-				--"ENABLE_LINE_INPUT",
-				--"ENABLE_QUICK_EDIT_MODE",
-				--"ENABLE_EXTENDED_FLAGS",
-				--"ENABLE_WRAP_AT_EOL_OUTPUT",
-				--"ENABLE_PROCESSED_INPUT",
-				--"ENABLE_ECHO_INPUT",
-				--"ENABLE_VIRTUAL_TERMINAL_PROCESSING",
 				"ENABLE_INSERT_MODE",
-			--"ENABLE_VIRTUAL_TERMINAL_INPUT", -- this seems broken to me
-			--"ENABLE_WINDOW_INPUT",
 			},
 			mode_flags
 		)
 		add_flags(
 			STD_OUTPUT_HANDLE,
 			{
-				--"ENABLE_PROCESSED_OUTPUT",
 				"ENABLE_PROCESSED_INPUT",
-				--"ENABLE_WRAP_AT_EOL_OUTPUT",
-				--"ENABLE_LINE_INPUT",
 				"ENABLE_VIRTUAL_TERMINAL_PROCESSING",
-			--"DISABLE_NEWLINE_AUTO_RETURN"
-			--"DISABLE_NEWLINE_AUTO_RETURN",
 			},
 			mode_flags
 		)
-		terminal.suppress_first = true
-		terminal.EnableCaret(true)
+
+		local self = setmetatable({
+			input = input,
+			output = output,
+			suppress_first = true,
+			event_queue = {},
+		}, meta)
+
+		self:EnableCaret(true)
+
+		return self
 	end
 
 	local function revert_flags(handle)
@@ -230,12 +314,12 @@ if jit.os == "Windows" then
 		if ffi.C.SetConsoleMode(ptr, old_flags[handle]) == 0 then throw_error() end
 	end
 
-	function terminal.Shutdown()
+	function meta:__gc()
 		revert_flags(STD_INPUT_HANDLE)
 		revert_flags(STD_OUTPUT_HANDLE)
 	end
 
-	function terminal.EnableCaret(b)
+	function meta:EnableCaret(b)
 		if
 			ffi.C.SetConsoleCursorInfo(
 				stdout,
@@ -247,73 +331,64 @@ if jit.os == "Windows" then
 		end
 	end
 
-	function terminal.Write(str)
-		if terminal.writing then return end
+	function meta:Write(str)
+		if self.writing then return end
 
-		terminal.writing = true
+		self.writing = true
 
-		if terminal.OnWrite and terminal.OnWrite(str) ~= false then io.write(str) end
+		if self.OnWrite and self.OnWrite(str) ~= false then 
+			self.output:write(str)
+		end
 
-		terminal.writing = false
+		self.writing = false
 	end
 
-	function terminal.GetCaretPosition()
+	function meta:GetCaretPosition()
 		local out = ffi.new("struct CONSOLE_SCREEN_BUFFER_INFO[1]")
 		ffi.C.GetConsoleScreenBufferInfo(stdout, out)
 		return out[0].dwCursorPosition.X + 1, out[0].dwCursorPosition.Y + 1
 	end
 
-	function terminal.SetCaretPosition(x, y)
-		local w, h = terminal.GetSize()
-		x = math.clamp(math.floor(x) - 1, 0, w)
-		y = math.clamp(math.floor(y) - 1, 0, h)
-		ffi.C.SetConsoleCursorPosition(stdout, ffi.new("struct COORD", {X = x, Y = y}))
-	end
-
-	function terminal.SetCaretPosition(x, y)
+	function meta:SetCaretPosition(x, y)
 		x = math.max(math.floor(x), 0)
 		y = math.max(math.floor(y), 0)
-		terminal.Write("\27[" .. y .. ";" .. x .. "f")
+		self:Write("\27[" .. y .. ";" .. x .. "f")
 	end
 
-	function terminal.WriteStringToScreen(x, y, str)
-		terminal.Write("\27[s\27[" .. y .. ";" .. x .. "f" .. str .. "\27[u")
+	function meta:WriteStringToScreen(x, y, str)
+		self:Write("\27[s\27[" .. y .. ";" .. x .. "f" .. str .. "\27[u")
 	end
 
-	function terminal.SetTitle(str)
+	function meta:SetTitle(str)
 		ffi.C.SetConsoleTitleA(str)
 	end
 
-	function terminal.Clear()
-		os.execute("cls")
-	end
-
-	function terminal.GetSize()
+	function meta:GetSize()
 		local out = ffi.new("struct CONSOLE_SCREEN_BUFFER_INFO[1]")
 		ffi.C.GetConsoleScreenBufferInfo(stdout, out)
 		return out[0].dwSize.X, out[0].dwSize.Y
 	end
 
-	function terminal.ForegroundColor(r, g, b)
+	function meta:ForegroundColor(r, g, b)
 		r = math.floor(r * 255)
 		g = math.floor(g * 255)
 		b = math.floor(b * 255)
-		terminal.Write("\27[38;2;" .. r .. ";" .. g .. ";" .. b .. "m")
+		self:Write("\27[38;2;" .. r .. ";" .. g .. ";" .. b .. "m")
 	end
 
-	function terminal.ForegroundColorFast(r, g, b)
-		terminal.Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
+	function meta:ForegroundColorFast(r, g, b)
+		self:Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
 	end
 
-	function terminal.BackgroundColor(r, g, b)
+	function meta:BackgroundColor(r, g, b)
 		r = math.floor(r * 255)
 		g = math.floor(g * 255)
 		b = math.floor(b * 255)
-		terminal.Write("\27[48;2;" .. r .. ";" .. g .. ";" .. b .. "m")
+		self:Write("\27[48;2;" .. r .. ";" .. g .. ";" .. b .. "m")
 	end
 
-	function terminal.ResetColor()
-		terminal.Write("\27[0m")
+	function meta:ResetColor()
+		self:Write("\27[0m")
 	end
 
 	local keys = {
@@ -487,7 +562,7 @@ if jit.os == "Windows" then
 		SHIFT_PRESSED = 0x0010,
 	}
 
-	local function read()
+	function meta:Read()
 		local events = ffi.new("unsigned long[1]")
 		local rec = ffi.new("struct INPUT_RECORD[128]")
 
@@ -502,8 +577,8 @@ if jit.os == "Windows" then
 				error(throw_error())
 			end
 
-			if terminal.suppress_first then
-				terminal.suppress_first = false
+			if self.suppress_first then
+				self.suppress_first = false
 				return
 			end
 
@@ -511,89 +586,86 @@ if jit.os == "Windows" then
 		end
 	end
 
-	terminal.event_buffer = {}
+	function meta:ReadEvent()
+		-- Fill the event queue if it's empty
+		if #self.event_queue == 0 then
+			local events, count = self:Read()
 
-	function terminal.ReadEvents()
-		local events, count = read()
+			if events then
+				for i = 1, count do
+					local evt = events[i - 1]
 
-		if events then
-			for i = 1, count do
-				local evt = events[i - 1]
+					if evt.EventType == 1 then -- KEY_EVENT
+						if evt.Event.KeyEvent.bKeyDown == 1 then
+							local str = utf8_local.from_uint32(evt.Event.KeyEvent.uChar.UnicodeChar)
+							local key_code = evt.Event.KeyEvent.wVirtualKeyCode
+							local mod = flags_to_table(evt.Event.KeyEvent.dwControlKeyState, modifiers)
+							
+							local ctrl = mod.LEFT_CTRL_PRESSED or mod.RIGHT_CTRL_PRESSED
+							local shift = mod.SHIFT_PRESSED
+							local alt = mod.LEFT_ALT_PRESSED or mod.RIGHT_ALT_PRESSED
 
-				--[[
-				print("==========================================================")
-				print(i, "bKeyDown: ", evt.Event.KeyEvent.bKeyDown)
-				print(i, "wRepeatCount: ", evt.Event.KeyEvent.wRepeatCount)
-				print(i, "wVirtualKeyCode: ", evt.Event.KeyEvent.wVirtualKeyCode)
-				print(i, "wVirtualScanCode: ", evt.Event.KeyEvent.wVirtualScanCode)
-				print(i, "uChar UnicodeChar: ", evt.Event.KeyEvent.uChar.UnicodeChar)
-				print(i, "uChar AsciiChar: ", evt.Event.KeyEvent.uChar.AsciiChar)
-				print(i, "dwControlKeyState: ", evt.Event.KeyEvent.dwControlKeyState)
-				print(i, "char: ", utf8.from_uint32(evt.Event.KeyEvent.uChar.UnicodeChar))
-				print(i, "mod: ", utility.FlagsToTable(evt.Event.KeyEvent.dwControlKeyState, modifiers))
+							-- Special case for Shift+Alt+D (becomes Ctrl+Delete)
+							if shift and alt and evt.Event.KeyEvent.uChar.UnicodeChar == 68 then
+								ctrl = true
+								shift = false
+								alt = false
+								key_code = keys.VK_DELETE
+							end
 
-				print("==========================================================")
-			--]]
-				if evt.EventType == 1 then
-					if evt.Event.KeyEvent.bKeyDown == 1 then
-						local str = utf8.from_uint32(evt.Event.KeyEvent.uChar.UnicodeChar)
-						local key = evt.Event.KeyEvent.wVirtualKeyCode
-						local mod = utility.FlagsToTable(evt.Event.KeyEvent.dwControlKeyState, modifiers)
-						--print(evt.Event.KeyEvent.uChar.UnicodeChar)
-						--for k,v in pairs(keys) do if v == key then print(k) end end
-						--table.print(mod)
-						local CTRL = mod.LEFT_CTRL_PRESSED or mod.RIGHT_CTRL_PRESSED
-						local SHIFT = mod.SHIFT_PRESSED or mod.SHIFT_PRESSED
+							local event = {
+								key = "",
+								modifiers = {
+									ctrl = ctrl,
+									shift = shift,
+									alt = alt,
+								}
+							}
 
-						if
-							mod.SHIFT_PRESSED and
-							mod.LEFT_ALT_PRESSED and
-							evt.Event.KeyEvent.uChar.UnicodeChar == 68
-						then
-							CTRL = true
-							SHIFT = false
-							key = keys.VK_DELETE
-							mod.SHIFT_PRESSED = nil
-							mod.LEFT_ALT_PRESSED = nil
-						end
-
-						if SHIFT and evt.Event.KeyEvent.uChar.UnicodeChar ~= 0 then
-							list.insert(terminal.event_buffer, {"string", str})
-						else
-							if str == "\3" then
-								list.insert(terminal.event_buffer, {"ctrl_c"})
-							elseif CTRL then
-								if key == keys.VK_RIGHT then
-									list.insert(terminal.event_buffer, {"ctrl_right"})
-								elseif key == keys.VK_LEFT then
-									list.insert(terminal.event_buffer, {"ctrl_left"})
-								elseif key == keys.VK_BACK or evt.Event.KeyEvent.uChar.UnicodeChar == 23 then
-									list.insert(terminal.event_buffer, {"ctrl_backspace"})
-								elseif key == keys.VK_DELETE or evt.Event.KeyEvent.uChar.UnicodeChar == 68 then
-									list.insert(terminal.event_buffer, {"ctrl_delete"})
-								end
+							-- Determine the key name
+							if key_code == keys.VK_RETURN then
+								event.key = "enter"
+							elseif key_code == keys.VK_DELETE then
+								event.key = "delete"
+							elseif key_code == keys.VK_LEFT then
+								event.key = "left"
+							elseif key_code == keys.VK_RIGHT then
+								event.key = "right"
+							elseif key_code == keys.VK_UP then
+								event.key = "up"
+							elseif key_code == keys.VK_DOWN then
+								event.key = "down"
+							elseif key_code == keys.VK_HOME then
+								event.key = "home"
+							elseif key_code == keys.VK_END then
+								event.key = "end"
+							elseif key_code == keys.VK_BACK then
+								event.key = "backspace"
+							elseif key_code == keys.VK_TAB then
+								event.key = "tab"
+							elseif key_code == keys.VK_INSERT then
+								event.key = "insert"
+							elseif key_code == keys.VK_PRIOR then
+								event.key = "pageup"
+							elseif key_code == keys.VK_NEXT then
+								event.key = "pagedown"
+							elseif key_code == keys.VK_ESCAPE then
+								event.key = "escape"
+							elseif key_code >= keys.VK_F1 and key_code <= keys.VK_F12 then
+								event.key = "f" .. (key_code - keys.VK_F1 + 1)
+							elseif evt.Event.KeyEvent.uChar.UnicodeChar > 31 then
+								-- Printable character
+								event.key = str
+							elseif ctrl and evt.Event.KeyEvent.uChar.UnicodeChar >= 1 and evt.Event.KeyEvent.uChar.UnicodeChar <= 26 then
+								-- Ctrl+letter combinations
+								event.key = string.char(evt.Event.KeyEvent.uChar.UnicodeChar + 96)
 							else
-								if key == keys.VK_RETURN then
-									list.insert(terminal.event_buffer, {"enter"})
-								elseif key == keys.VK_DELETE then
-									list.insert(terminal.event_buffer, {"delete"})
-								elseif key == keys.VK_LEFT then
-									list.insert(terminal.event_buffer, {"left"})
-								elseif key == keys.VK_RIGHT then
-									list.insert(terminal.event_buffer, {"right"})
-								elseif key == keys.VK_UP then
-									list.insert(terminal.event_buffer, {"up"})
-								elseif key == keys.VK_DOWN then
-									list.insert(terminal.event_buffer, {"down"})
-								elseif key == keys.VK_HOME then
-									list.insert(terminal.event_buffer, {"home"})
-								elseif key == keys.VK_END then
-									list.insert(terminal.event_buffer, {"end"})
-								elseif key == keys.VK_BACK then
-									list.insert(terminal.event_buffer, {"backspace"})
-								elseif evt.Event.KeyEvent.uChar.UnicodeChar > 31 then
-									list.insert(terminal.event_buffer, {"string", str})
-								end
+								-- Skip unknown keys
+								event = nil
+							end
+
+							if event and event.key ~= "" then
+								table.insert(self.event_queue, event)
 							end
 						end
 					end
@@ -601,12 +673,29 @@ if jit.os == "Windows" then
 			end
 		end
 
-		return terminal.event_buffer
+		-- Return the first event from the queue
+		if #self.event_queue > 0 then
+			return table.remove(self.event_queue, 1)
+		end
+
+		return nil
 	end
 else
+	ffi.cdef("const char *strerror(int errnum)")
+
+	local function lasterror(num)
+		num = num or ffi.errno()
+
+		local err = ffi.string(ffi.C.strerror(num))
+		err = err == "" and tostring(num) or err
+
+		return err, num
+	end
+
+	local termios
 	if jit.os ~= "OSX" then
-		ffi.cdef([[
-            struct termios
+		termios = ffi.typeof([[
+            struct
             {
                 unsigned int c_iflag;		/* input mode flags */
                 unsigned int c_oflag;		/* output mode flags */
@@ -616,11 +705,11 @@ else
                 unsigned char c_cc[32];		/* control characters */
                 unsigned int c_ispeed;		/* input speed */
                 unsigned int c_ospeed;		/* output speed */
-            };
+            }
         ]])
 	else
-		ffi.cdef([[
-            struct termios
+		termios = ffi.typeof([[
+            struct
             {
                 unsigned long c_iflag;		/* input mode flags */
                 unsigned long c_oflag;		/* output mode flags */
@@ -629,23 +718,23 @@ else
                 unsigned char c_cc[20];		/* control characters */
                 unsigned long c_ispeed;		/* input speed */
                 unsigned long c_ospeed;		/* output speed */
-            };
+            }
         ]])
 	end
 
 	ffi.cdef([[
-        int tcgetattr(int, struct termios *);
-        int tcsetattr(int, int, const struct termios *);
+        int tcgetattr(int, $ *);
+        int tcsetattr(int, int, const $ *);
 
-        typedef struct FILE FILE;
-        size_t fwrite(const char *ptr, size_t size, size_t nmemb, FILE *stream);
-        size_t fread( char * ptr, size_t size, size_t count, FILE * stream );
+        size_t fwrite(const char *ptr, size_t size, size_t nmemb, void *stream);
+        size_t fread( char * ptr, size_t size, size_t count, void * stream );
 
         ssize_t read(int fd, void *buf, size_t count);
-        int fileno(FILE *stream);
+        int fileno(void *stream);
 
-        int ferror(FILE*stream);
-    ]])
+        int ferror(void*stream);
+    ]], termios, termios)
+
 	local VMIN = 6
 	local VTIME = 5
 	local TCSANOW = 0
@@ -653,6 +742,7 @@ else
 
 	if jit.os ~= "OSX" then
 		flags = {
+			-- c_lflag (local flags)
 			ECHOCTL = 512,
 			EXTPROC = 65536,
 			ECHOK = 32,
@@ -669,11 +759,16 @@ else
 			ECHOPRT = 1024,
 			TOSTOP = 256,
 			ISIG = 1,
+			-- c_iflag (input flags)
+			IXON = 0x00000400,   -- Enable XON/XOFF flow control on output
+			IXOFF = 0x00001000,  -- Enable XON/XOFF flow control on input
+			IXANY = 0x00000800,  -- Allow any char to restart output
 		}
 	else
 		VMIN = 16
 		VTIME = 17
 		flags = {
+			-- c_lflag (local flags)
 			ECHOKE = 0x00000001,
 			ECHOE = 0x00000002,
 			ECHOK = 0x00000004,
@@ -691,25 +786,32 @@ else
 			NOKERNINFO = 0x02000000,
 			PENDIN = 0x20000000,
 			NOFLSH = 0x80000000,
+			-- c_iflag (input flags)
+			IXON = 0x00000200,   -- Enable XON/XOFF flow control on output
+			IXOFF = 0x00000400,  -- Enable XON/XOFF flow control on input
+			IXANY = 0x00000800,  -- Allow any char to restart output
 		}
 	end
 
-	local stdin = 0
-	local old_attributes
+	local meta = {}
+	meta.__index = meta
 
-	function terminal.Initialize()
-		io.stdin:setvbuf("no")
-		io.stdout:setvbuf("no")
+	local termios_boxed = ffi.typeof("$[1]", termios)
 
-		if not old_attributes then
-			old_attributes = ffi.new("struct termios[1]")
-			ffi.C.tcgetattr(stdin, old_attributes)
-		end
+	function terminal.WrapFile(input, output)
+		local fd_no = ffi.C.fileno(input)
 
-		local attr = ffi.new("struct termios[1]")
+		input:setvbuf("no")
+		output:setvbuf("no")
 
-		if ffi.C.tcgetattr(stdin, attr) ~= 0 then error(ffi.strerror(), 2) end
+		local old_attributes = termios_boxed()
+		ffi.C.tcgetattr(fd_no, old_attributes)
 
+		local attr = termios_boxed()
+
+		if ffi.C.tcgetattr(fd_no, attr) ~= 0 then error(lasterror(), 2) end
+
+		-- Disable canonical mode, echo, and other local flags
 		attr[0].c_lflag = bit.band(
 			tonumber(attr[0].c_lflag),
 			bit.bnot(
@@ -724,195 +826,109 @@ else
 				)
 			)
 		)
+		
+		-- Disable XON/XOFF flow control (allows Ctrl+S and Ctrl+Q to work)
+		attr[0].c_iflag = bit.band(
+			tonumber(attr[0].c_iflag),
+			bit.bnot(
+				bit.bor(
+					flags.IXON,   -- Disable output flow control
+					flags.IXOFF,  -- Disable input flow control
+					flags.IXANY   -- Disable restart on any char
+				)
+			)
+		)
+		
 		attr[0].c_cc[VMIN] = 0
 		attr[0].c_cc[VTIME] = 0
 
-		if ffi.C.tcsetattr(stdin, TCSANOW, attr) ~= 0 then error(ffi.strerror(), 2) end
+		if ffi.C.tcsetattr(fd_no, TCSANOW, attr) ~= 0 then error(lasterror(), 2) end
 
-		if ffi.C.tcgetattr(stdin, attr) ~= 0 then error(ffi.strerror(), 2) end
+		if ffi.C.tcgetattr(fd_no, attr) ~= 0 then error(lasterror(), 2) end
+
+		local self = setmetatable({
+			input = input,
+			output = output,
+			old_attributes = old_attributes,
+		}, meta)
 
 		if attr[0].c_cc[VMIN] ~= 0 or attr[0].c_cc[VTIME] ~= 0 then
-			terminal.Shutdown()
-			error("unable to make stdin non blocking", 2)
+			self:__gc()
+			error("unable to make fd non blocking", 2)
 		end
 
-		terminal.EnableCaret(true)
-	end
-
-	function terminal.Shutdown()
-		if old_attributes then
-			ffi.C.tcsetattr(stdin, TCSANOW, old_attributes)
-			old_attributes = nil
-		end
-	end
-
-	function terminal.EnableCaret(b) end
-
-	function terminal.Clear()
-		os.execute("clear")
+		return self
 	end
 
 	do
-		local buff = ffi.new("char[512]")
-		local buff_size = ffi.sizeof(buff)
+		local winsize = ffi.typeof([[struct {
+			unsigned short int ws_row;
+			unsigned short int ws_col;
+			unsigned short int ws_xpixel;
+			unsigned short int ws_ypixel;
+		}]])
 
-		function terminal.Read()
-			do
-				return io.read()
-			end
+		ffi.cdef("int ioctl(int fd, unsigned long int req, ...);")
 
-			local len = ffi.C.read(stdin, buff, buff_size)
+		local TIOCGWINSZ = 0x5413
 
-			if len > 0 then return ffi.string(buff, len) end
+		if jit.os == "OSX" then TIOCGWINSZ = 0x40087468 end
+
+		local size = ffi.typeof("$[1]", ffi.typeof("$", winsize))
+
+		function meta:GetSize()
+			local fd_no = ffi.C.fileno(self.output)
+			local num = ffi.C.ioctl(fd_no, TIOCGWINSZ, size)
+			if num ~= 0 then error(lasterror(), 2) end
+			return size[0].ws_col, size[0].ws_row
 		end
 	end
 
-	function terminal.Write(str)
-		if terminal.writing then return end
-
-		terminal.writing = true
-
-		if terminal.OnWrite and terminal.OnWrite(str) ~= false then
-			terminal.WriteNow(str)
-		end
-
-		terminal.writing = false
+	function meta:Read()
+		local char = self.input:read(1)
+		if char == "" then return nil end
+		return char
 	end
 
-	function terminal.WriteNow(str)
-		ffi.C.fwrite(str, 1, #str, io.stdout)
+	function meta:Write(str)
+		self.output:write(str)
 	end
 
-	function terminal.SetTitle(str)
-		--terminal.Write("\27[s\27[0;0f" .. str .. "\27[u")
-		io.write(str, "\n")
+	function meta:__gc()
+		local fd_no = ffi.C.fileno(self.output)
+		local num = ffi.C.tcsetattr(fd_no, TCSANOW, self.old_attributes)
+		if num ~= 0 then wlog("terminal:__gc: unable to restore terminal attributes: %s", lasterror()) end
 	end
 
-	function terminal.SetCaretPosition(x, y)
-		x = math.max(math.floor(x), 0)
-		y = math.max(math.floor(y), 0)
-		terminal.Write("\27[" .. y .. ";" .. x .. "f")
+	function meta:EnableCaret(b) 
+		error("not implemented on this platform")
 	end
 
-	local function add_event(...)
-		list.insert(terminal.event_buffer, {...})
+	function meta:SetTitle(str)
+		self:Write(string.format("\27[s\27[0;0f%s\27[u", str))
 	end
 
-	local function process_input(str)
-		if str == "" then
-			add_event("enter")
-			return
-		end
+	function meta:SetCaretPosition(x, y)
+		self:Write(string.format("\27[%i;%if", y, x))
+	end
 
-		local buf = utility.CreateBuffer(str)
-		buf:SetPosition(0)
+	do
+		local function read_coordinates()
+			while true do
+				local str = terminal.Read()
 
-		while true do
-			local c = buf:ReadChar()
+				if str then
+					local a, b = str:match("^\27%[(%d+);(%d+)R$")
 
-			if not c then break end
-
-			if c:byte() < 32 then
-				if c == "\27" then
-					local c = buf:ReadChar()
-
-					if c == "[" then
-						local c = buf:ReadChar()
-
-						if c == "D" then
-							add_event("left")
-						elseif c == "1" then
-							local c = buf:ReadString(3)
-
-							if c == ";5D" then
-								add_event("ctrl_left")
-							elseif c == ";5C" then
-								add_event("ctrl_right")
-							elseif c == ";5F" then
-								add_event("home")
-							elseif c == ";5H" then
-								add_event("end")
-							end
-						elseif c == "C" then
-							add_event("right")
-						elseif c == "A" then
-							add_event("up")
-						elseif c == "B" then
-							add_event("down")
-						elseif c == "H" then
-							add_event("home")
-						elseif c == "F" then
-							add_event("end")
-						elseif c == "3" then
-							add_event("delete")
-							local c = buf:ReadChar()
-
-							if c == ";" then
-								-- prevents alt and meta delete key from spilling ;9 and ;3
-								buf:Advance(2)
-							elseif c ~= "~" then
-								-- spill all other keys except ~
-								buf:Advance(-1)
-							end
-						elseif c == "2" then
-							add_event("backspace")
-						else
-							wlog("unhandled control character %q", c)
-						end
-					elseif c == "b" then
-						add_event("ctrl_left")
-					elseif c == "f" then
-						add_event("ctrl_right")
-					elseif c == "d" then
-						add_event("ctrl_delete")
-					else
-						wlog("unhandled control character %q", c)
-					end
-				elseif c == "\r" or c == "\n" then
-					add_event("enter")
-				elseif c == "\3" then
-					add_event("ctrl_c")
-				elseif c == "\23" or c == "\8" then -- ctrl backspace
-					add_event("ctrl_backspace")
-				elseif c == "\22" then
-					add_event("ctrl_v")
-				elseif c == "\1" then
-					add_event("home")
-				elseif c == "\5" then
-					add_event("end")
-				elseif c == "\21" then
-					add_event("ctrl_backspace")
-				else
-					wlog("unhandled control character %q", c)
+					if a then return tonumber(a), tonumber(b) end
 				end
-			elseif c == "\127" then
-				add_event("backspace")
-			elseif utf8.byte_length(c) then
-				buf:Advance(-1)
-				add_event("string", buf:ReadString(utf8.byte_length(c)))
-			end
-
-			if buf:GetPosition() >= buf:GetSize() then break end
-		end
-	end
-
-	local function read_coordinates()
-		while true do
-			local str = terminal.Read()
-
-			if str then
-				local a, b = str:match("^\27%[(%d+);(%d+)R$")
-
-				if a then return tonumber(a), tonumber(b) end
 			end
 		end
-	end
 
-	do
 		local _x, _y = 0, 0
 
-		function terminal.GetCaretPosition()
-			terminal.WriteNow("\x1b[6n")
+		function meta:GetCaretPosition()
+			self:Write("\x1b[6n")
 			local y, x = read_coordinates()
 
 			if y then _x, _y = x, y end
@@ -921,65 +937,204 @@ else
 		end
 	end
 
-	do
-		local STDOUT_FILENO = 1
-		ffi.cdef([[
-            struct terminal_winsize
-            {
-                unsigned short int ws_row;
-                unsigned short int ws_col;
-                unsigned short int ws_xpixel;
-                unsigned short int ws_ypixel;
-            };
-        
-            int ioctl(int fd, unsigned long int req, ...);    
-        ]])
-		local TIOCGWINSZ = 0x5413
+	function meta:WriteStringToScreen(x, y, str)
+		self:Write(string.format("\27[s\27[%i;%if%s\27[u", y, x, str))
+	end
 
-		if jit.os == "OSX" then TIOCGWINSZ = 0x40087468 end
+	function meta:ForegroundColor(r, g, b)
+		self:Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
+	end
 
-		local size = ffi.new("struct terminal_winsize[1]")
+	function meta:BackgroundColor(r, g, b)
+		self:Write(string.format("\27[48;2;%i;%i;%im", r, g, b))
+	end
 
-		function terminal.GetSize()
-			ffi.C.ioctl(STDOUT_FILENO, TIOCGWINSZ, size)
-			return size[0].ws_col, size[0].ws_row
+	function meta:ResetColor()
+		self:Write("\27[0m")
+	end
+
+	-- Escape sequence parser for macOS
+	local escape_buffer = ""
+	local escape_sequences = {
+		["\27[A"] = "up",
+		["\27[B"] = "down", 
+		["\27[C"] = "right",
+		["\27[D"] = "left",
+		["\27[H"] = "home",
+		["\27[F"] = "end",
+		["\27[3~"] = "delete",
+		["\27[2~"] = "insert",
+		["\27[5~"] = "pageup",
+		["\27[6~"] = "pagedown",
+		["\27OP"] = "f1",
+		["\27OQ"] = "f2",
+		["\27OR"] = "f3",
+		["\27OS"] = "f4",
+		["\27[15~"] = "f5",
+		["\27[17~"] = "f6",
+		["\27[18~"] = "f7",
+		["\27[19~"] = "f8",
+		["\27[20~"] = "f9",
+		["\27[21~"] = "f10",
+		["\27[23~"] = "f11",
+		["\27[24~"] = "f12",
+	}
+
+	-- CSI sequences with modifiers: \x1b[1;MODIFIERkey
+	-- Modifier codes: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt
+	local csi_keys = {
+		A = "up", B = "down", C = "right", D = "left",
+		H = "home", F = "end",
+		P = "f1", Q = "f2", R = "f3", S = "f4",
+	}
+
+	local function decode_modifier(mod_code)
+		local modifiers = {
+			ctrl = false,
+			shift = false,
+			alt = false,
+		}
+		
+		if mod_code >= 5 then
+			modifiers.ctrl = true
+			mod_code = mod_code - 4
 		end
+		
+		if mod_code >= 3 then
+			modifiers.alt = true
+			mod_code = mod_code - 2
+		end
+		
+		if mod_code >= 2 then
+			modifiers.shift = true
+		end
+		
+		return modifiers
 	end
 
-	function terminal.WriteStringToScreen(x, y, str)
-		terminal.Write("\27[s\27[" .. y .. ";" .. x .. "f" .. str .. "\27[u")
-	end
+	function meta:ReadEvent()
+		local char = self:Read()
 
-	function terminal.ForegroundColor(r, g, b)
-		r = math.floor(r * 255)
-		g = math.floor(g * 255)
-		b = math.floor(b * 255)
-		terminal.Write("\27[38;2;" .. r .. ";" .. g .. ";" .. b .. "m")
-	end
+		if not char then
+			return nil
+		end
 
-	function terminal.ForegroundColorFast(r, g, b)
-		terminal.Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
-	end
+		-- Handle escape sequences
+		if char == "\27" then
+			escape_buffer = "\27"
+			
+			while true do
+				local next_char = self:Read()
+				if not next_char then break end
+				escape_buffer = escape_buffer .. next_char
+				
+				-- Check for CSI sequence with modifiers: \x1b[1;MODkey or \x1b[MODkey
+				local mod_code, key_char = escape_buffer:match("^\27%[1;(%d+)([A-Z])$")
+				if not mod_code then
+					mod_code, key_char = escape_buffer:match("^\27%[(%d+)([A-Z])$")
+				end
+				
+				if mod_code and key_char and csi_keys[key_char] then
+					local modifiers = decode_modifier(tonumber(mod_code))
+					return {
+						key = csi_keys[key_char],
+						modifiers = modifiers,
+					}
+				end
+				
+				-- Check for complete escape sequence
+				if escape_sequences[escape_buffer] then
+					return {
+						key = escape_sequences[escape_buffer],
+						modifiers = { ctrl = false, shift = false, alt = false },
+					}
+				end
+				
+				-- Check if it's a tilde-terminated sequence
+				if escape_buffer:match("~$") then
+					break
+				end
+				
+				-- Check if it's a letter-terminated CSI sequence
+				if escape_buffer:match("^\27%[[%d;]*[A-Z]$") then
+					break
+				end
+				
+				-- Check if it's an SS3 sequence (alt sequences)
+				if escape_buffer:match("^\27O[A-Z]$") then
+					break
+				end
+			end
+			
+			-- Alt + key combinations (ESC followed by regular character)
+			if #escape_buffer == 2 and escape_buffer:byte(2) >= 32 and escape_buffer:byte(2) <= 126 then
+				return {
+					key = escape_buffer:sub(2, 2),
+					modifiers = { ctrl = false, shift = false, alt = true },
+				}
+			end
+			
+			-- Unknown or incomplete escape sequence
+			escape_buffer = ""
+			return {
+				key = "escape",
+				modifiers = { ctrl = false, shift = false, alt = false },
+			}
+		end
 
-	function terminal.BackgroundColor(r, g, b)
-		r = math.floor(r * 255)
-		g = math.floor(g * 255)
-		b = math.floor(b * 255)
-		terminal.Write("\27[48;2;" .. r .. ";" .. g .. ";" .. b .. "m")
-	end
+		-- Handle control characters (Ctrl+A through Ctrl+Z)
+		local byte = char:byte()
+		if byte >= 1 and byte <= 26 then
+			local key = string.char(byte + 96) -- Convert to lowercase letter
+			return {
+				key = key,
+				modifiers = { ctrl = true, shift = false, alt = false },
+			}
+		end
 
-	function terminal.ResetColor()
-		terminal.Write("\27[0m")
-	end
+		-- Special characters
+		if byte == 127 or byte == 8 then -- DEL or backspace
+			return {
+				key = "backspace",
+				modifiers = { ctrl = false, shift = false, alt = false },
+			}
+		elseif byte == 9 then -- Tab
+			return {
+				key = "tab",
+				modifiers = { ctrl = false, shift = false, alt = false },
+			}
+		elseif byte == 13 or byte == 10 then -- Enter
+			return {
+				key = "enter",
+				modifiers = { ctrl = false, shift = false, alt = false },
+			}
+		end
 
-	terminal.event_buffer = {}
+		-- Regular printable characters
+		if byte >= 32 and byte <= 126 then
+			return {
+				key = char,
+				modifiers = { ctrl = false, shift = false, alt = false },
+			}
+		end
 
-	function terminal.ReadEvents()
-		local str = terminal.Read()
+		-- UTF-8 multi-byte character
+		local len = utf8_local.byte_length(char)
+		if len and len > 1 then
+			local full_char = char
+			for i = 2, len do
+				local next = self:Read()
+				if next then
+					full_char = full_char .. next
+				end
+			end
+			return {
+				key = full_char,
+				modifiers = { ctrl = false, shift = false, alt = false },
+			}
+		end
 
-		if str then process_input(str) end
-
-		return terminal.event_buffer
+		return nil
 	end
 end
 

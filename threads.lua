@@ -1,18 +1,6 @@
 local ffi = require("ffi")
 local threads = {}
 
-function threads.run_thread(ptr, udata)
-	error("NYI")
-end
-
-function threads.join_thread(id)
-	error("NYI")
-end
-
-function threads.get_cpu_threads(id)
-	error("NYI")
-end
-
 if ffi.os == "Windows" then
 	ffi.cdef[[
 		typedef uint32_t (*thread_callback)(void*);
@@ -257,7 +245,12 @@ do
                 local buf = buffer.new()
                 buf:encode(run(input))
                 local ptr, len = buf:ref()
-                return ffi.new("uint64_t[2]", ffi.cast("uint64_t", ptr), len)
+                local res = ffi.new("uint64_t[2]", ffi.cast("uint64_t", ptr), len)
+
+                -- Mark as completed
+                udata[2] = 1
+
+                return res
             end
             
             return ffi.new("uintptr_t[1]", ffi.cast("uintptr_t", ffi.cast("void *(*)(void *)", main)))
@@ -274,10 +267,13 @@ do
 		buf:encode(obj)
 		self.buffer = buf
 		local ptr, len = buf:ref()
-		local data = ffi.new("uint64_t[2]", ffi.cast("uint64_t", ptr), len)
-		self.input_data = data  -- Keep alive until join to prevent premature GC
-		self.id = threads.run_thread(self.func_ptr, data)
+		self.input_data = ffi.new("uint64_t[3]", ffi.cast("uint64_t", ptr), len, 0)
+		self.id = threads.run_thread(self.func_ptr, self.input_data)
 	end
+
+    function meta:is_done()
+        return self.input_data and self.input_data[2] == 1
+    end
 
 	function meta:join()
 		local out = threads.join_thread(self.id)
