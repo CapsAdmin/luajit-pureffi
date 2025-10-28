@@ -184,6 +184,24 @@ function threads.pointer_decode(ptr, len)
 	return buf:decode()
 end
 
+local thread_func_signature = "void *(*)(void *)"
+local thread_data_t = ffi.typeof([[
+	struct {
+		char *buffer;
+		uint32_t buffer_len;
+		void *shared_pointer;
+		uint8_t completed;
+	}
+]])
+local thread_join_data_t = ffi.typeof([[
+	struct {
+		char *buffer;
+		uint32_t buffer_len;
+	}
+]])
+threads.thread_data_ptr_t = ffi.typeof("$*", thread_data_t)
+threads.thread_join_data_t = thread_join_data_t
+
 do
 	local LUA_GLOBALSINDEX = -10002
 	ffi.cdef[[
@@ -249,8 +267,6 @@ do
 		end
 	end
 
-	local thread_func_signature = "void *(*)(void *)"
-
 	function threads.new(func)
 		local self = setmetatable({}, meta)
 		local L = create_state()
@@ -259,36 +275,29 @@ do
 			[[
             local run = assert(load(...))
             local ffi = require("ffi")
-            local buffer = require("string.buffer")
+			local threads = require("threads")
 
             local function main(udata)
-                local udata = ffi.cast("uint64_t *", udata)
+                local data = ffi.cast(threads.thread_data_ptr_t, udata)
 
-                -- Check if using shared memory mode (udata[0] == 0)
-                if udata[0] == 0 then
-                    -- Shared memory mode: udata[3] contains shared pointer
-                    local shared_ptr = ffi.cast("void*", udata[3])
-                    local result = run(shared_ptr)
+                if data.shared_pointer ~= nil then
+                    local result = run(data.shared_pointer)
 
-                    -- Mark as completed
-                    udata[2] = 1
+                    data.completed = 1
 
                     -- Return nothing (results written to shared memory)
-                    return ffi.new("uint64_t[2]", 0, 0)
-                else
-                    -- Serialized mode: udata[0] contains buffer pointer
+                    return nil
+				end
 
-					local input = threads.pointer_decode(udata[0], udata[1])
+				local input = threads.pointer_decode(data.buffer, tonumber(data.buffer_len))
+				local buf, ptr, len = threads.pointer_encode(run(input))
 
-					local buf, ptr, len = threads.pointer_encode(run(input))
-                    local res = ffi.new("uint64_t[2]", ffi.cast("uint64_t", ptr), len)
+				data.completed = 1
 
-                    -- Mark as completed
-                    udata[2] = 1
-
-                    return res
-                end
+				return threads.thread_join_data_t(ptr, len)
             end
+
+			_G.main_ref = main
 
             return ffi.new("uintptr_t[1]", ffi.cast("uintptr_t", ffi.cast("void *(*)(void *)", main)))
         ]],
@@ -302,13 +311,13 @@ do
 	function meta:run(obj, shared_ptr)
 		if shared_ptr then
 			self.buffer = nil
-			self.shared_ptr_ref = shared_ptr
-			self.input_data = ffi.new("uint64_t[4]", 0, 0, 0, ffi.cast("uint64_t", obj))
+			self.shared_ptr_ref = obj
+			self.input_data = thread_data_t({shared_pointer = ffi.cast("void *", obj)})
 			self.shared_mode = true
 		else
 			local buf, ptr, len = threads.pointer_encode(obj)
 			self.buffer = buf
-			self.input_data = ffi.new("uint64_t[4]", ffi.cast("uint64_t", ptr), len, 0, 0)
+			self.input_data = thread_data_t({buffer = ptr, buffer_len = len})
 			self.shared_mode = false
 		end
 
@@ -330,8 +339,8 @@ do
 			return nil
 		else
 			-- Serialized mode: deserialize result
-			local data = ffi.cast("uint64_t *", out)
-			local result = threads.pointer_decode(data[0], data[1])
+			local data = ffi.cast(threads.thread_data_ptr_t, out)
+			local result = threads.pointer_decode(data.buffer, data.buffer_len)
 			-- Clear references to allow GC
 			self.buffer = nil
 			self.input_data = nil

@@ -243,8 +243,6 @@ while not should_exit do
         generation = 0
         last_width, last_height = new_width, new_height
 
-        -- Note: Thread pool stays alive, no need to recreate
-
         -- Display the new grid and skip to next iteration
         -- This prevents running threads with mismatched dimensions
         display_grid(grid, generation, width, height, term_width, term_height)
