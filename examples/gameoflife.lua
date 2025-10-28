@@ -31,6 +31,9 @@ local term = terminal.WrapFile(io.stdin, io.stdout)
 -- Use alternate screen buffer (no scrollback, cleaner)
 term:UseAlternateScreen(true)
 
+-- Enable mouse support
+term:EnableMouse(true)
+
 -- Thread worker function - computes Game of Life for assigned rows
 local function worker(input)
     local start_row = input.start_row
@@ -111,12 +114,14 @@ local function display_grid(g, generation, w, h, tw, th)
     term:SetCaretPosition(1, 1)
     -- Header
     term:PushForegroundColor(0.5, 0.8, 1.0)
-    term:Write("Generation: " .. generation .. " | Cells: " .. w .. "x" .. h .. " | Ctrl+C to exit")
+    term:Write(string.format("Gen: %-8d | Cells: %dx%d\n", generation, w, h))
     term:PopAttribute()
-    term:Write("\n")
+    term:PushForegroundColor(0.8, 0.8, 0.8)
+    term:Write("Click=toggle | Space=pause | R=random | C=clear | Ctrl+C=exit\n")
+    term:PopAttribute()
 
     local braille_width = math.ceil(w / 2)
-    term:Write(string.rep("─", braille_width) .. "\n")
+   -- term:Write(string.rep("─", braille_width) .. "\n")
 
     -- Grid using braille characters
     -- Each braille char represents a 2x4 grid:
@@ -183,6 +188,7 @@ end
 
 -- Check for Ctrl+C
 local should_exit = false
+local paused = false
 
 -- Main loop
 local generation = 0
@@ -190,6 +196,35 @@ local last_width, last_height = term_width, term_height
 
 -- Hide cursor for cleaner display
 term:EnableCaret(false)
+
+-- Helper function to toggle a cell based on screen coordinates
+local function toggle_cell_at_screen(screen_x, screen_y)
+	-- Screen Y needs to account for header (2 lines) and separator (1 line)
+	local grid_screen_y = screen_y - 3
+	if grid_screen_y < 1 then return end
+
+	-- Convert screen position to grid position
+	-- Each braille character is 2x4 cells
+	local braille_x = screen_x - 1  -- 0-based braille column
+	local braille_y = grid_screen_y - 1  -- 0-based braille row
+
+	if braille_x < 0 or braille_y < 0 then return end
+
+	-- Convert to grid coordinates (each braille char = 2 cells wide, 4 cells tall)
+	local base_grid_x = braille_x * 2 + 1
+	local base_grid_y = braille_y * 4 + 1
+
+	-- Toggle all 8 cells in this braille character
+	for dy = 0, 3 do
+		for dx = 0, 1 do
+			local gx = base_grid_x + dx
+			local gy = base_grid_y + dy
+			if gx >= 1 and gx <= width and gy >= 1 and gy <= height then
+				grid[gy][gx] = 1 - grid[gy][gx]
+			end
+		end
+	end
+end
 
 while not should_exit do
     -- Check for terminal resize
@@ -216,15 +251,42 @@ while not should_exit do
         goto continue
     end
 
-    display_grid(grid, generation, width, height, term_width, term_height)
-
-    -- Check for Ctrl+C
+    -- Check for input events
     local event = term:ReadEvent()
     if event then
-        if event.key == "c" and event.modifiers.ctrl then
-            should_exit = true
-            break
+        if event.mouse then
+            -- Handle mouse events
+            if event.button == "left" and event.action == "pressed" then
+                toggle_cell_at_screen(event.x, event.y)
+            end
+        else
+            -- Handle keyboard events
+            if event.key == "c" and event.modifiers.ctrl then
+                should_exit = true
+                break
+            elseif event.key == " " then
+                paused = not paused
+            elseif event.key == "r" or event.key == "R" then
+                grid = create_grid(width, height)
+                generation = 0
+            elseif event.key == "c" or event.key == "C" then
+                -- Clear the grid
+                for y = 1, height do
+                    for x = 1, width do
+                        grid[y][x] = 0
+                    end
+                end
+                generation = 0
+            end
         end
+    end
+
+    -- Display once per frame
+    display_grid(grid, generation, width, height, term_width, term_height)
+
+    -- Skip evolution if paused
+    if paused then
+        goto continue
     end
 
     -- Submit work to all threads - threads stay alive and process the work
@@ -279,6 +341,7 @@ end
 thread_pool:shutdown()
 
 -- Cleanup terminal
+term:EnableMouse(false)  -- Disable mouse tracking
 term:UseAlternateScreen(false)  -- Restore main screen
 term:EnableCaret(true)
 term:NoAttributes()

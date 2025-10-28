@@ -153,6 +153,17 @@ function meta:EnableCaret(b)
 	end
 end
 
+function meta:EnableMouse(b)
+	if b then
+		-- Enable mouse tracking with SGR (1006) mode for better coordinate support
+		self:Write("\27[?1000h\27[?1006h") -- Enable mouse reporting + SGR extended mode
+	else
+		-- Disable mouse tracking
+		self:Write("\27[?1006l\27[?1000l") -- Disable SGR mode + mouse reporting
+	end
+	self.mouse_enabled = b
+end
+
 do
 	local function read_coordinates()
 		while true do
@@ -404,6 +415,7 @@ if jit.os == "Windows" then
 				old_flags_input = old_flags_input,
 				old_flags_output = old_flags_output,
 				attribute_stack = {},
+				mouse_enabled = false,
 			},
 			meta
 		)
@@ -657,6 +669,22 @@ if jit.os == "Windows" then
 		return result
 	end
 
+	-- Mouse button state flags
+	local mouse_buttons = {
+		FROM_LEFT_1ST_BUTTON_PRESSED = 0x0001,
+		RIGHTMOST_BUTTON_PRESSED = 0x0002,
+		FROM_LEFT_2ND_BUTTON_PRESSED = 0x0004,
+		FROM_LEFT_3RD_BUTTON_PRESSED = 0x0008,
+		FROM_LEFT_4TH_BUTTON_PRESSED = 0x0010,
+	}
+
+	local mouse_event_flags = {
+		MOUSE_MOVED = 0x0001,
+		DOUBLE_CLICK = 0x0002,
+		MOUSE_WHEELED = 0x0004,
+		MOUSE_HWHEELED = 0x0008,
+	}
+
 	function meta:ReadEvent()
 		-- Fill the event queue if it's empty
 		if #self.event_queue == 0 then
@@ -742,6 +770,88 @@ if jit.os == "Windows" then
 							if event and event.key ~= "" then
 								table.insert(self.event_queue, event)
 							end
+						end
+					elseif evt.EventType == 2 and self.mouse_enabled then -- MOUSE_EVENT
+						local mouse_evt = evt.Event.MouseEvent
+						local x = mouse_evt.dwMousePosition.X + 1 -- Convert to 1-based
+						local y = mouse_evt.dwMousePosition.Y + 1
+						local button_state = mouse_evt.dwButtonState
+						local event_flags = mouse_evt.dwEventFlags
+						local control_state = mouse_evt.dwControlKeyState
+
+						-- Parse modifiers
+						local mod = flags_to_table(control_state, modifiers)
+						local ctrl = mod.LEFT_CTRL_PRESSED or mod.RIGHT_CTRL_PRESSED
+						local shift = mod.SHIFT_PRESSED
+						local alt = mod.LEFT_ALT_PRESSED or mod.RIGHT_ALT_PRESSED
+
+						-- Track previous button state for press/release detection
+						if not self.last_button_state then
+							self.last_button_state = 0
+						end
+
+						local event = nil
+
+						-- Check for wheel events
+						if bit.band(event_flags, mouse_event_flags.MOUSE_WHEELED) ~= 0 then
+							-- High word of button_state contains wheel delta (signed)
+							local delta = bit.arshift(button_state, 16)
+							event = {
+								mouse = true,
+								x = x,
+								y = y,
+								button = delta > 0 and "wheel_up" or "wheel_down",
+								action = "pressed",
+								modifiers = {ctrl = ctrl, shift = shift, alt = alt},
+							}
+						-- Check for movement
+						elseif bit.band(event_flags, mouse_event_flags.MOUSE_MOVED) ~= 0 then
+							event = {
+								mouse = true,
+								x = x,
+								y = y,
+								button = "none",
+								action = "moved",
+								modifiers = {ctrl = ctrl, shift = shift, alt = alt},
+							}
+						-- Check for button events
+						else
+							-- Detect button changes
+							local changed = bit.bxor(button_state, self.last_button_state)
+
+							if changed ~= 0 then
+								local button_name = nil
+								local action = nil
+
+								-- Check which button changed
+								if bit.band(changed, mouse_buttons.FROM_LEFT_1ST_BUTTON_PRESSED) ~= 0 then
+									button_name = "left"
+									action = bit.band(button_state, mouse_buttons.FROM_LEFT_1ST_BUTTON_PRESSED) ~= 0 and "pressed" or "released"
+								elseif bit.band(changed, mouse_buttons.RIGHTMOST_BUTTON_PRESSED) ~= 0 then
+									button_name = "right"
+									action = bit.band(button_state, mouse_buttons.RIGHTMOST_BUTTON_PRESSED) ~= 0 and "pressed" or "released"
+								elseif bit.band(changed, mouse_buttons.FROM_LEFT_2ND_BUTTON_PRESSED) ~= 0 then
+									button_name = "middle"
+									action = bit.band(button_state, mouse_buttons.FROM_LEFT_2ND_BUTTON_PRESSED) ~= 0 and "pressed" or "released"
+								end
+
+								if button_name then
+									event = {
+										mouse = true,
+										x = x,
+										y = y,
+										button = button_name,
+										action = action,
+										modifiers = {ctrl = ctrl, shift = shift, alt = alt},
+									}
+								end
+							end
+						end
+
+						self.last_button_state = button_state
+
+						if event then
+							table.insert(self.event_queue, event)
 						end
 					end
 				end
@@ -919,6 +1029,7 @@ else
 				output = output,
 				old_attributes = old_attributes,
 				attribute_stack = {},
+				mouse_enabled = false,
 			},
 			meta
 		)
@@ -971,6 +1082,9 @@ else
 			print("terminal:__gc: unable to restore terminal attributes: %s", lasterror())
 		end
 	end
+
+	-- Mouse tracking state for Unix
+	local last_mouse_buttons = {}
 
 	-- Escape sequence parser for macOS
 	local escape_buffer = ""
@@ -1052,6 +1166,60 @@ else
 		end
 	end
 
+	-- Parse SGR (1006) mouse format: \x1b[<button;x;y[Mm]
+	local function parse_sgr_mouse(seq)
+		local button_code, x, y, action_char = seq:match("^\27%[<(%d+);(%d+);(%d+)([Mm])$")
+		if not button_code then return nil end
+
+		button_code = tonumber(button_code)
+		x = tonumber(x)
+		y = tonumber(y)
+
+		-- Parse button
+		local button_base = bit.band(button_code, 0x03)
+		local button_name
+		if bit.band(button_code, 0x40) ~= 0 then
+			-- Wheel event
+			button_name = (button_base == 0) and "wheel_up" or "wheel_down"
+		elseif button_base == 0 then
+			button_name = "left"
+		elseif button_base == 1 then
+			button_name = "middle"
+		elseif button_base == 2 then
+			button_name = "right"
+		else
+			button_name = "none"
+		end
+
+		-- Parse modifiers
+		local shift = bit.band(button_code, 0x04) ~= 0
+		local alt = bit.band(button_code, 0x08) ~= 0
+		local ctrl = bit.band(button_code, 0x10) ~= 0
+
+		-- Parse action: 'M' = pressed, 'm' = released
+		local action
+		if action_char == "M" then
+			action = (button_name == "wheel_up" or button_name == "wheel_down") and "pressed" or "pressed"
+		else
+			action = "released"
+		end
+
+		-- Handle movement (button 35 in SGR mode means movement with no button)
+		if button_base == 3 and bit.band(button_code, 0x20) ~= 0 then
+			button_name = "none"
+			action = "moved"
+		end
+
+		return {
+			mouse = true,
+			x = x,
+			y = y,
+			button = button_name,
+			action = action,
+			modifiers = {ctrl = ctrl, shift = shift, alt = alt},
+		}
+	end
+
 	function meta:ReadEvent()
 		local char = self:Read()
 
@@ -1067,6 +1235,17 @@ else
 				if not next_char then break end
 
 				escape_buffer = escape_buffer .. next_char
+
+				-- Check for SGR mouse sequence: \x1b[<...M or \x1b[<...m
+				if escape_buffer:match("^\27%[<[%d;]+[Mm]$") then
+					if self.mouse_enabled then
+						local mouse_event = parse_sgr_mouse(escape_buffer)
+						if mouse_event then
+							return mouse_event
+						end
+					end
+					break
+				end
 				-- Check for CSI sequence with modifiers: \x1b[1;MODkey or \x1b[MODkey
 				local mod_code, key_char = escape_buffer:match("^\27%[1;(%d+)([A-Z])$")
 
