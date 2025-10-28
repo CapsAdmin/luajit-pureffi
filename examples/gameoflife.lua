@@ -89,9 +89,9 @@ local function display_grid(g, generation, w, h, tw, th)
     
     term:SetCaretPosition(1, 1)
     -- Header
-    term:ForegroundColor(0.5, 0.8, 1.0)
+    term:PushForegroundColor(0.5, 0.8, 1.0)
     term:Write("Generation: " .. generation .. " | Size: " .. tw .. "x" .. th .. " | Ctrl+C to exit")
-    term:ResetColor()
+    term:PopAttribute()
     term:Write("\n")
     term:Write(string.rep("─", w * 2) .. "\n")
     
@@ -220,8 +220,7 @@ end
 
 -- Cleanup
 term:UseAlternateScreen(false)  -- Restore main screen
-term:Clear()
 term:EnableCaret(true)
 term:SetCaretPosition(1, 1)
-term:ResetColor()
+term:NoAttributes()
 term:Write("Game of Life ended. Goodbye!\n")

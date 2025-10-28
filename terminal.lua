@@ -15,6 +15,66 @@ function meta:WriteStringToScreen(x, y, str)
 	self:Write(string.format("\27[s\27[%i;%if%s\27[u", y, x, str))
 end
 
+function meta:PushForegroundColor(r, g, b)
+	table.insert(self.attribute_stack, {type = "fg", r = r, g = g, b = b})
+	self:ForegroundColor(r, g, b)
+end
+
+function meta:PushBackgroundColor(r, g, b)
+	table.insert(self.attribute_stack, {type = "bg", r = r, g = g, b = b})
+	self:BackgroundColor(r, g, b)
+end
+
+function meta:PushBold()
+	table.insert(self.attribute_stack, {type = "bold"})
+	self:Bold()
+end
+
+function meta:PushUnderline()
+	table.insert(self.attribute_stack, {type = "underline"})
+	self:Underline()
+end
+
+function meta:PushItalic()
+	table.insert(self.attribute_stack, {type = "italic"})
+	self:Italic()
+end
+
+function meta:PushDim()
+	table.insert(self.attribute_stack, {type = "dim"})
+	self:Dim()
+end
+
+function meta:PopAttribute()
+	if #self.attribute_stack == 0 then
+		-- Stack is empty, reset all attributes
+		self:NoAttributes()
+		return
+	end
+
+	-- Remove the top attribute
+	table.remove(self.attribute_stack)
+
+	-- Reset everything and reapply all remaining attributes
+	self:NoAttributes()
+	for _, attr in ipairs(self.attribute_stack) do
+		if attr.type == "fg" then
+			self:ForegroundColor(attr.r, attr.g, attr.b)
+		elseif attr.type == "bg" then
+			self:BackgroundColor(attr.r, attr.g, attr.b)
+		elseif attr.type == "bold" then
+			self:Bold()
+		elseif attr.type == "underline" then
+			self:Underline()
+		elseif attr.type == "italic" then
+			self:Italic()
+		elseif attr.type == "dim" then
+			self:Dim()
+		end
+	end
+end
+
+-- Text attribute stack management
 function meta:ForegroundColor(r, g, b)
 	self:Write(string.format("\27[38;2;%i;%i;%im", r, g, b))
 end
@@ -23,8 +83,29 @@ function meta:BackgroundColor(r, g, b)
 	self:Write(string.format("\27[48;2;%i;%i;%im", r, g, b))
 end
 
-function meta:ResetColor()
+function meta:Bold()
+	self:Write("\27[1m")
+end
+
+function meta:Underline()
+	self:Write("\27[4m")
+end
+
+function meta:Italic()
+	self:Write("\27[3m")
+end
+
+function meta:Dim()
+	self:Write("\27[2m")
+end
+
+function meta:NoAttributes()
 	self:Write("\27[0m")
+end
+
+function meta:ClearAttributeStack()
+	self.attribute_stack = {}
+	self:NoAttributes()
 end
 
 function meta:Clear()
@@ -322,6 +403,7 @@ if jit.os == "Windows" then
 				event_queue = {},
 				old_flags_input = old_flags_input,
 				old_flags_output = old_flags_output,
+				attribute_stack = {},
 			},
 			meta
 		)
@@ -836,6 +918,7 @@ else
 				input = input,
 				output = output,
 				old_attributes = old_attributes,
+				attribute_stack = {},
 			},
 			meta
 		)
