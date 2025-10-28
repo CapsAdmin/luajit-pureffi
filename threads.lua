@@ -171,9 +171,22 @@ else
 	end
 end
 
+function threads.pointer_encode(obj)
+	local buf = buffer.new()
+	buf:encode(obj)
+	local ptr, len = buf:ref()
+	return buf, ptr, len
+end
+
+function threads.pointer_decode(ptr, len)
+	local buf = buffer.new()
+	buf:set(ptr, len)
+	return buf:decode()
+end
+
 do
 	local LUA_GLOBALSINDEX = -10002
-    ffi.cdef[[
+	ffi.cdef[[
         typedef struct lua_State lua_State;
         lua_State *luaL_newstate(void);
         void luaL_openlibs(lua_State *L);
@@ -227,7 +240,7 @@ do
 
 	local meta = {}
 	meta.__index = meta
-	
+
 	-- Automatic cleanup when thread object is garbage collected
 	function meta:__gc()
 		if self.lua_state then
@@ -235,7 +248,7 @@ do
 			self.lua_state = nil
 		end
 	end
-	
+
 	local thread_func_signature = "void *(*)(void *)"
 
 	function threads.new(func)
@@ -264,13 +277,10 @@ do
                     return ffi.new("uint64_t[2]", 0, 0)
                 else
                     -- Serialized mode: udata[0] contains buffer pointer
-                    local buf = buffer.new()
-                    buf:set(ffi.cast("const char *", udata[0]), udata[1])
-                    local input = buf:decode()
 
-                    local buf = buffer.new()
-                    buf:encode(run(input))
-                    local ptr, len = buf:ref()
+					local input = threads.pointer_decode(udata[0], udata[1])
+
+					local buf, ptr, len = threads.pointer_encode(run(input))
                     local res = ffi.new("uint64_t[2]", ffi.cast("uint64_t", ptr), len)
 
                     -- Mark as completed
@@ -289,39 +299,25 @@ do
 		return self
 	end
 
-	function meta:run(obj)
-		local buf = buffer.new()
-		buf:encode(obj)
-		self.buffer = buf
-		local ptr, len = buf:ref()
-		self.input_data = ffi.new("uint64_t[4]", ffi.cast("uint64_t", ptr), len, 0, 0)
-		self.shared_mode = false
-		self.id = threads.run_thread(self.func_ptr, self.input_data)
-	end
-
-	-- Run with shared memory pointer instead of serialization
-	-- obj: optional serialized data (if nil, only shared_ptr is used)
-	-- shared_ptr: FFI pointer to shared memory structure
-	function meta:run_raw(obj, shared_ptr)
-		if obj == nil then
-			-- Pure shared memory mode: no serialization
-			self.input_data = ffi.new("uint64_t[4]", 0, 0, 0, ffi.cast("uint64_t", shared_ptr))
+	function meta:run(obj, shared_ptr)
+		if shared_ptr then
 			self.buffer = nil
+			self.shared_ptr_ref = shared_ptr
+			self.input_data = ffi.new("uint64_t[4]", 0, 0, 0, ffi.cast("uint64_t", obj))
+			self.shared_mode = true
 		else
-			-- Hybrid mode: serialized data + shared pointer
-			local buf = buffer.new()
-			buf:encode(obj)
+			local buf, ptr, len = threads.pointer_encode(obj)
 			self.buffer = buf
-			local ptr, len = buf:ref()
-			self.input_data = ffi.new("uint64_t[4]", ffi.cast("uint64_t", ptr), len, 0, ffi.cast("uint64_t", shared_ptr))
+			self.input_data = ffi.new("uint64_t[4]", ffi.cast("uint64_t", ptr), len, 0, 0)
+			self.shared_mode = false
 		end
-		self.shared_mode = true
+
 		self.id = threads.run_thread(self.func_ptr, self.input_data)
 	end
 
-    function meta:is_done()
-        return self.input_data and self.input_data[2] == 1
-    end
+	function meta:is_done()
+		return self.input_data and self.input_data[2] == 1
+	end
 
 	function meta:join()
 		local out = threads.join_thread(self.id)
@@ -330,37 +326,32 @@ do
 			-- Shared memory mode: no result to deserialize
 			self.buffer = nil
 			self.input_data = nil
+			self.shared_ptr_ref = nil
 			return nil
 		else
 			-- Serialized mode: deserialize result
 			local data = ffi.cast("uint64_t *", out)
-			local buf = buffer.new()
-			buf:set(ffi.cast("const char*", data[0]), data[1])
-			local result = buf:decode()
-
+			local result = threads.pointer_decode(data[0], data[1])
 			-- Clear references to allow GC
 			self.buffer = nil
 			self.input_data = nil
-
 			return result
 		end
 	end
 
 	function meta:close()
-        close_state(self.lua_state)
+		close_state(self.lua_state)
 	end
 end
-
 
 -- Thread pool implementation using shared memory
 do
 	local pool_meta = {}
 	pool_meta.__index = pool_meta
-
 	-- Define shared memory structure for thread pool communication
 	-- Each thread has: work_available, work_done, should_exit flags
-	ffi.cdef[[
-		typedef struct {
+	local thread_control_t = ffi.typeof[[
+		struct {
 			volatile int work_available;
 			volatile int work_done;
 			volatile int should_exit;
@@ -372,8 +363,11 @@ do
 			size_t result_data_len;  // Length of result data
 			int thread_id;
 			int padding;  // Alignment
-		} thread_control_t;
+		}
 	]]
+	threads.thread_control_t = thread_control_t
+	threads.thread_control_ptr_t = ffi.typeof("$*", thread_control_t)
+	local thread_control_array_t = ffi.typeof("$[?]", thread_control_t)
 
 	-- Create a new thread pool
 	function threads.new_pool(worker_func, num_threads)
@@ -381,85 +375,53 @@ do
 		self.num_threads = num_threads or 8
 		self.worker_func = worker_func
 		self.thread_objects = {}
-
 		-- Allocate shared control structures (one per thread)
-		self.control = ffi.new("thread_control_t[?]", num_threads)
-
+		self.control = thread_control_array_t(num_threads)
 		local worker_func_str = string.dump(worker_func)
 
 		-- Initialize control structures
 		for i = 0, num_threads - 1 do
-			self.control[i].work_available = 0
-			self.control[i].work_done = 1
-			self.control[i].should_exit = 0
-			self.control[i].worker_func = worker_func_str
-			self.control[i].worker_func_len = #worker_func_str
-			self.control[i].work_data = nil
-			self.control[i].work_data_len = 0
-			self.control[i].result_data = nil
-			self.control[i].result_data_len = 0
-			self.control[i].thread_id = i + 1  -- 1-based for Lua
+			local ctrl = self.control[i]
+			ctrl.work_available = 0
+			ctrl.work_done = 1
+			ctrl.should_exit = 0
+			ctrl.worker_func = worker_func_str
+			ctrl.worker_func_len = #worker_func_str
+			ctrl.work_data = nil
+			ctrl.work_data_len = 0
+			ctrl.result_data = nil
+			ctrl.result_data_len = 0
+			ctrl.thread_id = i + 1 -- 1-based for Lua
 		end
 
 		-- Keep buffers alive so pointers remain valid
 		self.work_buffers = {}
 		self.result_buffers = {}
-
 		-- Create persistent worker that loops waiting for work
 		local persistent_worker = function(shared_ptr)
 			local ffi = require("ffi")
 			local threads = require("threads")
 			local buffer = require("string.buffer")
-
-			-- Cast shared pointer to control structure
-			ffi.cdef[[
-				typedef struct {
-					volatile int work_available;
-					volatile int work_done;
-					volatile int should_exit;
-					const char* worker_func;
-					size_t worker_func_len;
-					const char* work_data;
-					size_t work_data_len;
-					char* result_data;
-					size_t result_data_len;
-					int thread_id;
-					int padding;
-				} thread_control_t;
-			]]
-
-			local control = ffi.cast("thread_control_t*", shared_ptr)
+			local control = ffi.cast(threads.thread_control_ptr_t, shared_ptr)
 			local thread_id = control.thread_id
-
 			-- Get the actual worker function from the serialized input
 			local worker_func = assert(load(ffi.string(control.worker_func, control.worker_func_len)))
 
 			-- Thread loop: wait for work, process it, repeat
 			while true do
 				-- Check if we should exit
-				if control.should_exit == 1 then
-					break
-				end
+				if control.should_exit == 1 then break end
 
 				-- Check if work is available
 				if control.work_available == 1 then
 					-- Deserialize work data
-					local buf = buffer.new()
-					buf:set(ffi.cast("const char*", control.work_data), control.work_data_len)
-					local work = buf:decode()
-
+					local work = threads.pointer_decode(control.work_data, control.work_data_len)
 					-- Process it with the worker function
 					local result = worker_func(work)
-
-					-- Serialize result
-					local result_buf = buffer.new()
-					result_buf:encode(result)
-					local result_ptr, result_len = result_buf:ref()
-
+					local buf, result_ptr, result_len = threads.pointer_encode(result)
 					-- Store result pointer in control structure
-					control.result_data = ffi.cast("char*", result_ptr)
+					control.result_data = result_ptr
 					control.result_data_len = result_len
-
 					-- Mark as done
 					control.work_available = 0
 					control.work_done = 1
@@ -475,31 +437,24 @@ do
 		-- Create and start persistent threads
 		for i = 1, num_threads do
 			local thread = threads.new(persistent_worker)
-
 			-- Pass the control structure pointer as shared memory
 			-- and the worker function as serialized data
 			local control_ptr = self.control + (i - 1)
-			thread:run_raw(nil, control_ptr)
-
+			thread:run(control_ptr, true)
 			self.thread_objects[i] = thread
 		end
 
 		return self
 	end
-	
+
 	-- Submit work to a specific thread
 	function pool_meta:submit(thread_id, work)
 		local idx = thread_id - 1
 		assert(self.control[idx].work_done == 1, "Thread " .. thread_id .. " is still busy")
-
-		-- Serialize work data
-		local buf = buffer.new()
-		buf:encode(work)
-		self.work_buffers[thread_id] = buf  -- Keep buffer alive
-		local work_ptr, work_len = buf:ref()
-
+		local buf, work_ptr, work_len = threads.pointer_encode(work)
+		self.work_buffers[thread_id] = buf -- Keep buffer alive
 		-- Set work data in shared control structure
-		self.control[idx].work_data = ffi.cast("const char*", work_ptr)
+		self.control[idx].work_data = work_ptr
 		self.control[idx].work_data_len = work_len
 		self.control[idx].work_done = 0
 		self.control[idx].work_available = 1
@@ -508,21 +463,20 @@ do
 	-- Wait for a specific thread to complete
 	function pool_meta:wait(thread_id)
 		local idx = thread_id - 1
+
 		while self.control[idx].work_done == 0 do
 			threads.sleep(1)
 		end
 
-		-- Deserialize result from shared memory
-		local buf = buffer.new()
-		buf:set(ffi.cast("const char*", self.control[idx].result_data), self.control[idx].result_data_len)
-		local result = buf:decode()
-
-		return result
+		return threads.pointer_decode(self.control[idx].result_data, self.control[idx].result_data_len)
 	end
 
 	-- Submit work to all threads
 	function pool_meta:submit_all(work_items)
-		assert(#work_items == self.num_threads, "Must provide work for all " .. self.num_threads .. " threads")
+		assert(
+			#work_items == self.num_threads,
+			"Must provide work for all " .. self.num_threads .. " threads"
+		)
 
 		for i = 1, self.num_threads do
 			self:submit(i, work_items[i])
@@ -532,9 +486,11 @@ do
 	-- Wait for all threads to complete
 	function pool_meta:wait_all()
 		local results = {}
+
 		for i = 1, self.num_threads do
 			results[i] = self:wait(i)
 		end
+
 		return results
 	end
 
@@ -556,9 +512,7 @@ do
 
 	-- Cleanup on garbage collection
 	function pool_meta:__gc()
-		if self.thread_objects and #self.thread_objects > 0 then
-			self:shutdown()
-		end
+		if self.thread_objects and #self.thread_objects > 0 then self:shutdown() end
 	end
 end
 
