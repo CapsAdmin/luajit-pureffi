@@ -221,6 +221,5 @@ end
 -- Cleanup
 term:UseAlternateScreen(false)  -- Restore main screen
 term:EnableCaret(true)
-term:SetCaretPosition(1, 1)
 term:NoAttributes()
 term:Write("Game of Life ended. Goodbye!\n")
