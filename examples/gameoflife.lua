@@ -1,6 +1,30 @@
 local threads = require("threads")
 local terminal = require("terminal")
 
+local function braille(...)
+    local dots = {...}
+    local offset = 0
+    
+    -- Map dot numbers to bit positions
+    -- Dot 1 = bit 0, Dot 2 = bit 1, Dot 3 = bit 2, etc.
+    for _, dot in ipairs(dots) do
+        if dot >= 1 and dot <= 8 then
+            offset = bit.bor(offset, bit.lshift(1, dot - 1))
+        end
+    end
+    
+    -- Braille Unicode block starts at U+2800
+    local codepoint = 0x2800 + offset
+    
+    -- Manually encode UTF-8 (3 bytes for U+2800-U+28FF range)
+    -- Format: 1110xxxx 10xxxxxx 10xxxxxx
+    local byte1 = bit.bor(0xE0, bit.rshift(codepoint, 12))
+    local byte2 = bit.bor(0x80, bit.band(bit.rshift(codepoint, 6), 0x3F))
+    local byte3 = bit.bor(0x80, bit.band(codepoint, 0x3F))
+    
+    return string.char(byte1, byte2, byte3)
+end
+
 -- Initialize terminal
 local term = terminal.WrapFile(io.stdin, io.stdout)
 
@@ -14,7 +38,7 @@ local function worker(input)
     local width = input.width
     local height = input.height
     local grid = input.grid
-    
+
     -- Helper to count neighbors with wrapping
     local function count_neighbors(x, y)
         local count = 0
@@ -32,7 +56,7 @@ local function worker(input)
         end
         return count
     end
-    
+
     -- Compute next state for assigned rows
     local result = {}
     for y = start_row, end_row do
@@ -40,7 +64,7 @@ local function worker(input)
         for x = 1, width do
             local neighbors = count_neighbors(x, y)
             local cell = grid[y][x]
-            
+
             -- Conway's rules
             if cell == 1 then
                 result[y][x] = (neighbors == 2 or neighbors == 3) and 1 or 0
@@ -49,7 +73,7 @@ local function worker(input)
             end
         end
     end
-    
+
     return result
 end
 
@@ -58,8 +82,9 @@ math.randomseed(os.time())
 
 -- Get initial terminal size
 local term_width, term_height = term:GetSize()
-local width = math.floor(term_width / 2) - 1  -- Each cell is 2 chars wide
-local height = term_height - 4  -- Reserve space for header/footer
+-- Each braille char represents 2x4 cells
+local width = (term_width - 1) * 2  -- 2 cells per braille char width
+local height = (term_height - 4) * 4  -- 4 cells per braille char height
 
 -- Create grid with random initial state
 local function create_grid(w, h)
@@ -75,56 +100,84 @@ end
 
 local grid = create_grid(width, height)
 
--- Create thread pool (8 threads)
-local num_threads = 8
-local thread_pool = {}
+-- Create thread pool (8 threads) - these threads will stay alive for the entire session
+local num_threads = threads.get_thread_count()
+local thread_pool = threads.new_pool(worker, num_threads)
 
-for i = 1, num_threads do
-    thread_pool[i] = threads.new(worker)
-end
-
--- Display function using terminal module
+-- Display function using braille characters
 local function display_grid(g, generation, w, h, tw, th)
     term:BeginFrame()  -- Start buffering
-    
+
     term:SetCaretPosition(1, 1)
     -- Header
     term:PushForegroundColor(0.5, 0.8, 1.0)
-    term:Write("Generation: " .. generation .. " | Size: " .. tw .. "x" .. th .. " | Ctrl+C to exit")
+    term:Write("Generation: " .. generation .. " | Cells: " .. w .. "x" .. h .. " | Ctrl+C to exit")
     term:PopAttribute()
     term:Write("\n")
-    term:Write(string.rep("─", w * 2) .. "\n")
-    
-    -- Grid - with safety checks
-    for y = 1, h do
-        if g[y] then
-            for x = 1, w do
-                if g[y][x] == 1 then
-                    term:ForegroundColor(50, 255, 76)  -- Green for alive cells
-                    term:Write("██")
-                elseif g[y][x] == 0 then
-                    term:ForegroundColor(25, 25, 25)  -- Dark for dead cells
-                    term:Write("··")
-                else
-                    -- Cell doesn't exist, show as dead
-                    term:ForegroundColor(25, 25, 25)
-                    term:Write("··")
+
+    local braille_width = math.ceil(w / 2)
+    term:Write(string.rep("─", braille_width) .. "\n")
+
+    -- Grid using braille characters
+    -- Each braille char represents a 2x4 grid:
+    -- 1 4    (column 1, column 2)
+    -- 2 5
+    -- 3 6
+    -- 7 8
+    local braille_height = math.ceil(h / 4)
+
+    for by = 0, braille_height - 1 do
+        for bx = 0, braille_width - 1 do
+            -- Collect the 8 cells for this braille character
+            local dots = {}
+            local any_alive = false
+
+            -- Map grid cells to braille dots
+            local base_y = by * 4 + 1
+            local base_x = bx * 2 + 1
+
+            -- Left column (dots 1,2,3,7)
+            local dot_map = {
+                {base_y, base_x, 1},      -- dot 1
+                {base_y + 1, base_x, 2},  -- dot 2
+                {base_y + 2, base_x, 3},  -- dot 3
+                {base_y + 3, base_x, 7},  -- dot 7
+                -- Right column (dots 4,5,6,8)
+                {base_y, base_x + 1, 4},      -- dot 4
+                {base_y + 1, base_x + 1, 5},  -- dot 5
+                {base_y + 2, base_x + 1, 6},  -- dot 6
+                {base_y + 3, base_x + 1, 8},  -- dot 8
+            }
+
+            for _, mapping in ipairs(dot_map) do
+                local y, x, dot_num = mapping[1], mapping[2], mapping[3]
+                if y <= h and x <= w and g[y] and g[y][x] == 1 then
+                    table.insert(dots, dot_num)
+                    any_alive = true
                 end
             end
-        else
-            -- Row doesn't exist, fill with dead cells
-            term:ForegroundColor(25, 25, 25)
-            for x = 1, w do
-                term:Write("··")
+
+            -- Set color based on whether any cells are alive
+            if any_alive then
+                term:ForegroundColor(50, 255, 76)  -- Green for alive cells
+            else
+                term:ForegroundColor(25, 25, 25)  -- Dark for dead cells
+            end
+
+            -- Draw braille character
+            if #dots > 0 then
+                term:Write(braille(unpack(dots)))
+            else
+                term:Write(braille())  -- Empty braille character
             end
         end
         term:Write("\n")
     end
-    
+
     -- Footer
-    term:Write(string.rep("─", w * 2))
+    term:Write(string.rep("─", braille_width))
     term:Write("\n")
-    
+
     term:EndFrame()  -- Flush all at once
 end
 
@@ -144,30 +197,27 @@ while not should_exit do
     if new_width ~= last_width or new_height ~= last_height then
         -- Terminal resized, restart simulation
         term_width, term_height = new_width, new_height
-        width = math.floor(term_width / 2) - 1
-        height = term_height - 4
-        
+        width = (term_width - 1) * 2  -- 2 cells per braille char width
+        height = (term_height - 4) * 4  -- 4 cells per braille char height
+
         -- Ensure dimensions are valid
         if width < 1 then width = 1 end
         if height < 1 then height = 1 end
-        
+
         grid = create_grid(width, height)
         generation = 0
         last_width, last_height = new_width, new_height
-        
-        -- Clear thread pool and recreate
-        for i = 1, num_threads do
-            thread_pool[i] = threads.new(worker)
-        end
-        
+
+        -- Note: Thread pool stays alive, no need to recreate
+
         -- Display the new grid and skip to next iteration
         -- This prevents running threads with mismatched dimensions
         display_grid(grid, generation, width, height, term_width, term_height)
         goto continue
     end
-    
+
     display_grid(grid, generation, width, height, term_width, term_height)
-    
+
     -- Check for Ctrl+C
     local event = term:ReadEvent()
     if event then
@@ -176,23 +226,30 @@ while not should_exit do
             break
         end
     end
-    
-    -- Launch all threads with their assigned rows
+
+    -- Submit work to all threads - threads stay alive and process the work
     local rows_per_thread = math.floor(height / num_threads)
+    local work_items = {}
     for i = 1, num_threads do
         local start_row = (i - 1) * rows_per_thread + 1
         local end_row = math.min(i * rows_per_thread, height)
-        
-        thread_pool[i]:run({
+
+        work_items[i] = {
             start_row = start_row,
             end_row = end_row,
             width = width,
             height = height,
             grid = grid
-        })
+        }
     end
-    
-    -- Collect results and assemble new grid
+
+    -- Submit work to all threads
+    thread_pool:submit_all(work_items)
+
+    -- Wait for all threads to complete and collect results
+    local results = thread_pool:wait_all()
+
+    -- Assemble new grid from thread results
     local new_grid = {}
     -- Pre-initialize all rows
     for y = 1, height do
@@ -201,24 +258,27 @@ while not should_exit do
             new_grid[y][x] = 0  -- Default to dead cells
         end
     end
-    
+
     -- Collect thread results
     for i = 1, num_threads do
-        local result = thread_pool[i]:join()
+        local result = results[i]
         if result then
             for y, row in pairs(result) do
                 new_grid[y] = row
             end
         end
     end
-    
+
     grid = new_grid
     generation = generation + 1
-    
+
     ::continue::
 end
 
--- Cleanup
+-- Cleanup - shutdown the thread pool to join all threads
+thread_pool:shutdown()
+
+-- Cleanup terminal
 term:UseAlternateScreen(false)  -- Restore main screen
 term:EnableCaret(true)
 term:NoAttributes()
