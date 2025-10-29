@@ -1573,7 +1573,7 @@ do
 				}))
 			end
 		else
-			len, err, num = socket.recv(self.fd, buff, ffi.sizeof(buff), flags or 0)
+			len, err, num = socket.recv(self.fd, buff, size, flags or 0)
 		end
 
 		if num == errno.ECONNRESET then
