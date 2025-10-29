@@ -184,23 +184,22 @@ function threads.pointer_decode(ptr, len)
 	return buf:decode()
 end
 
+threads.STATUS_UNDEFINED = 0
+threads.STATUS_COMPLETED = 1
+threads.STATUS_ERROR = 2
+
 local thread_func_signature = "void *(*)(void *)"
 local thread_data_t = ffi.typeof([[
 	struct {
-		char *buffer;
-		uint32_t buffer_len;
+		char *input_buffer;
+		uint32_t input_buffer_len;
+		char *output_buffer;
+		uint32_t output_buffer_len;
 		void *shared_pointer;
-		uint8_t completed;
-	}
-]])
-local thread_join_data_t = ffi.typeof([[
-	struct {
-		char *buffer;
-		uint32_t buffer_len;
+		uint8_t status;
 	}
 ]])
 threads.thread_data_ptr_t = ffi.typeof("$*", thread_data_t)
-threads.thread_join_data_t = thread_join_data_t
 
 do
 	local LUA_GLOBALSINDEX = -10002
@@ -283,23 +282,44 @@ do
                 if data.shared_pointer ~= nil then
                     local result = run(data.shared_pointer)
 
-                    data.completed = 1
+                    data.status = threads.STATUS_COMPLETED
 
                     -- Return nothing (results written to shared memory)
                     return nil
 				end
 
-				local input = threads.pointer_decode(data.buffer, tonumber(data.buffer_len))
+				local input = threads.pointer_decode(data.input_buffer, tonumber(data.input_buffer_len))
 				local buf, ptr, len = threads.pointer_encode(run(input))
 
-				data.completed = 1
+				data.output_buffer = ptr
+				data.output_buffer_len = len
 
-				return threads.thread_join_data_t(ptr, len)
+				data.status = threads.STATUS_COMPLETED
+
+				return nil
             end
 
-			_G.main_ref = main
+			local function main_protected(udata)
+				local ok, err_or_ptr = pcall(main, udata)
+				if not ok then
+					local data = ffi.cast(threads.thread_data_ptr_t, udata)
 
-            return ffi.new("uintptr_t[1]", ffi.cast("uintptr_t", ffi.cast("void *(*)(void *)", main)))
+					data.status = threads.STATUS_ERROR
+
+					local data = ffi.cast(threads.thread_data_ptr_t, udata)
+					local buf, ptr, len = threads.pointer_encode({ok, err_or_ptr})
+					data.output_buffer = ptr
+					data.output_buffer_len = len
+
+					return nil
+				end
+
+				return err_or_ptr
+			end
+
+			_G.main_ref = main_protected
+
+            return ffi.new("uintptr_t[1]", ffi.cast("uintptr_t", ffi.cast("void *(*)(void *)", main_protected)))
         ]],
 			func
 		)
@@ -317,7 +337,7 @@ do
 		else
 			local buf, ptr, len = threads.pointer_encode(obj)
 			self.buffer = buf
-			self.input_data = thread_data_t({buffer = ptr, buffer_len = len})
+			self.input_data = thread_data_t({input_buffer = ptr, input_buffer_len = len})
 			self.shared_mode = false
 		end
 
@@ -325,11 +345,11 @@ do
 	end
 
 	function meta:is_done()
-		return self.input_data and self.input_data[2] == 1
+		return self.input_data and self.input_data.status == threads.STATUS_COMPLETED
 	end
 
 	function meta:join()
-		local out = threads.join_thread(self.id)
+		threads.join_thread(self.id)
 
 		if self.shared_mode then
 			-- Shared memory mode: no result to deserialize
@@ -338,12 +358,15 @@ do
 			self.shared_ptr_ref = nil
 			return nil
 		else
-			-- Serialized mode: deserialize result
-			local data = ffi.cast(threads.thread_data_ptr_t, out)
-			local result = threads.pointer_decode(data.buffer, data.buffer_len)
-			-- Clear references to allow GC
+			local result = threads.pointer_decode(self.input_data.output_buffer, self.input_data.output_buffer_len)
+			local status = self.input_data.status
 			self.buffer = nil
 			self.input_data = nil
+			
+			if status == threads.STATUS_ERROR then
+				return result[1], result[2]
+			end
+
 			return result
 		end
 	end
