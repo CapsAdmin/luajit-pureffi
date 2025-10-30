@@ -1304,14 +1304,6 @@ else
 		-- Handle control characters (Ctrl+A through Ctrl+Z)
 		local byte = char:byte()
 
-		if byte >= 1 and byte <= 26 then
-			local key = string.char(byte + 96) -- Convert to lowercase letter
-			return {
-				key = key,
-				modifiers = {ctrl = true, shift = false, alt = false},
-			}
-		end
-
 		-- Special characters
 		if byte == 127 or byte == 8 then -- DEL or backspace
 			return {
@@ -1335,6 +1327,14 @@ else
 			return {
 				key = char,
 				modifiers = {ctrl = false, shift = false, alt = false},
+			}
+		end
+
+		if byte >= 1 and byte <= 26 then
+			local key = string.char(byte + 96) -- Convert to lowercase letter
+			return {
+				key = key,
+				modifiers = {ctrl = true, shift = false, alt = false},
 			}
 		end
 
