@@ -56,6 +56,16 @@ local function format_mode(mode)
 	return result
 end
 
+-- Helper to check if file is an image
+local function is_image_file(filename)
+	if not filename then return false end
+	local ext = filename:match("%.([^%.]+)$")
+	if not ext then return false end
+	ext = ext:lower()
+	return ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "gif" or 
+	       ext == "bmp" or ext == "webp" or ext == "tiff" or ext == "tif"
+end
+
 -- Load files in current directory
 local function load_files()
 	files = {}
@@ -254,6 +264,53 @@ local function draw_ui()
 			term:PopAttribute()
 			term:SetCaretPosition(detail_x + 12, detail_y)
 			term:Write(format_mode(file.mode))
+		end
+
+		-- Image preview
+		if file.type == "file" and is_image_file(file.name) then
+			detail_y = detail_y + 2
+			term:SetCaretPosition(detail_x, detail_y)
+			term:PushBold()
+			term:Write("Preview:")
+			term:PopAttribute()
+
+			detail_y = detail_y + 1
+			term:SetCaretPosition(detail_x, detail_y)
+
+			-- Try to load and display the image
+			local image_path = current_dir
+			if image_path:sub(-1) ~= "/" then
+				image_path = image_path .. "/"
+			end
+			image_path = image_path .. file.name
+
+			local success, err = pcall(function()
+				local file_handle = io.open(image_path, "rb")
+				if file_handle then
+					local image_data = file_handle:read("*all")
+					file_handle:close()
+
+					-- Calculate available space for image
+					local available_width = width - detail_x - 2
+					local available_height = height - detail_y - 2
+
+					-- Try to display the image with reasonable size
+					local image_width = math.min(40, available_width)
+					local image_height = math.min(20, available_height)
+
+					term:WriteImage(image_data, {
+						width = image_width,
+						height = image_height,
+						preserveAspectRatio = true
+					})
+				end
+			end)
+
+			if not success then
+				term:PushForegroundColor(255, 100, 100)
+				term:Write("Error: " .. tostring(err))
+				term:PopAttribute()
+			end
 		end
 	end
 
