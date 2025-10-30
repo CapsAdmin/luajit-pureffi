@@ -36,6 +36,11 @@ while running do
 	local event = term:ReadEvent()
 
 	if event then
+		if event.key == "c" and event.modifiers.ctrl then
+			running = false
+			break
+		end
+
 		if event.key and not event.mouse then
 			-- Keyboard event
 			key_count = key_count + 1
@@ -159,9 +164,6 @@ while running do
 
 			last_x, last_y = event.x, event.y
 			term:Flush()
-		elseif event.key == "c" and event.modifiers.ctrl then
-			running = false
-			break
 		end
 	end
 end
