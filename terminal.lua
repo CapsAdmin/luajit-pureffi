@@ -1175,6 +1175,9 @@ else
 		x = tonumber(x)
 		y = tonumber(y)
 
+		-- Check for motion bit (0x20 = 32)
+		local has_motion = bit.band(button_code, 0x20) ~= 0
+
 		-- Parse button
 		local button_base = bit.band(button_code, 0x03)
 		local button_name
@@ -1196,18 +1199,17 @@ else
 		local alt = bit.band(button_code, 0x08) ~= 0
 		local ctrl = bit.band(button_code, 0x10) ~= 0
 
-		-- Parse action: 'M' = pressed, 'm' = released
+		-- Parse action
 		local action
-		if action_char == "M" then
+		if has_motion then
+			-- Motion bit is set - this is a drag/move event
+			action = "moved"
+		elseif action_char == "M" then
+			-- 'M' without motion bit = pressed
 			action = (button_name == "wheel_up" or button_name == "wheel_down") and "pressed" or "pressed"
 		else
+			-- 'm' = released
 			action = "released"
-		end
-
-		-- Handle movement (button 35 in SGR mode means movement with no button)
-		if button_base == 3 and bit.band(button_code, 0x20) ~= 0 then
-			button_name = "none"
-			action = "moved"
 		end
 
 		return {
