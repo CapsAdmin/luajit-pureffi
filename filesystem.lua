@@ -196,16 +196,13 @@ if jit.arch ~= "Windows" then
 
 			if ptr == nil then return nil, last_error() end
 
-			local i = 1
-
 			while true do
 				local dir_info = ffi.C.readdir(ptr)
 
 				if dir_info == nil then break end
 
 				if not is_dots(dir_info.d_name) then
-					out[i] = ffi.string(dir_info.d_name)
-					i = i + 1
+					table.insert(out, ffi.string(dir_info.d_name))
 				end
 			end
 
@@ -226,13 +223,18 @@ if jit.arch ~= "Windows" then
 				tbl[0] = tbl[0] + 1
 			end
 
+			-- Pre-allocate strings to avoid repeated concatenation
+			local path_len = #path
+			local has_trailing_slash = path:byte(path_len) == 47 -- '/' character
+
 			while true do
 				local dir_info = ffi.C.readdir(ptr)
 
 				if dir_info == nil then break end
 
 				if not is_dots(dir_info.d_name) then
-					local name = path .. ffi.string(dir_info.d_name)
+					local filename = ffi.string(dir_info.d_name)
+					local name = has_trailing_slash and (path .. filename) or (path .. "/" .. filename)
 
 					if dir_info.d_type == 4 then
 						if not can_traverse or can_traverse(name) ~= false then
@@ -292,10 +294,13 @@ if jit.arch ~= "Windows" then
 
 	do
 		ffi.cdef("char *getcwd(char *buf, size_t size);")
+		
+		-- Pre-allocate buffer for reuse across calls
+		local temp_buffer = ffi.new("char[1024]")
+		local buffer_size = ffi.sizeof(temp_buffer)
 
 		function fs.get_current_directory()
-			local temp = ffi.new("char[1024]")
-			return ffi.string(ffi.C.getcwd(temp, ffi.sizeof(temp)))
+			return ffi.string(ffi.C.getcwd(temp_buffer, buffer_size))
 		end
 	end
 else
@@ -437,12 +442,9 @@ else
 			local out = {}
 
 			if handle ~= INVALID_FILE then
-				local i = 1
-
 				repeat
 					if not is_dots(data[0].cFileName) then
-						out[i] = ffi_string(data[0].cFileName)
-						i = i + 1
+						table.insert(out, ffi_string(data[0].cFileName))
 					end				
 				until ffi.C.FindNextFileA(handle, data) == 0
 
@@ -456,7 +458,7 @@ else
 			local handle = ffi.C.FindFirstFileA(path .. "*", data)
 
 			if handle == nil then
-				list.insert(errors, {path = path, error = last_error()})
+				table.insert(errors, {path = path, error = last_error()})
 				return
 			end
 
@@ -466,15 +468,18 @@ else
 			end
 
 			if handle ~= INVALID_FILE then
-				local i = 1
+				-- Pre-check if path ends with slash to avoid repeated concatenations
+				local path_len = #path
+				local has_trailing_slash = path:byte(path_len) == 47 -- '/' character
 
 				repeat
 					if not is_dots(data[0].cFileName) then
-						local name = path .. ffi_string(data[0].cFileName)
+						local filename = ffi_string(data[0].cFileName)
+						local name = has_trailing_slash and (path .. filename) or (path .. "/" .. filename)
 
 						if bit.band(data[0].dwFileAttributes, DIRECTORY) == DIRECTORY then
 							if not can_traverse or can_traverse(name) ~= false then
-								fs.walk(name .. "/", tbl, errors)
+								fs.walk(name .. "/", tbl, errors, can_traverse, files_only)
 							end
 						else
 							tbl[tbl[0]] = name
@@ -492,11 +497,14 @@ else
 
 	do
 		ffi.cdef[[unsigned long GetCurrentDirectoryA(unsigned long, char *);]]
+		
+		-- Pre-allocate buffer for reuse
+		local temp_buffer = ffi.new("char[260]")
+		local buffer_size = 260
 
 		function fs.get_current_directory()
-			local buffer = ffi.new("char[260]")
-			local length = ffi.C.GetCurrentDirectoryA(260, buffer)
-			return ffi.string(buffer, length):gsub("\\", "/")
+			local length = ffi.C.GetCurrentDirectoryA(buffer_size, temp_buffer)
+			return ffi.string(temp_buffer, length):gsub("\\", "/")
 		end
 	end
 

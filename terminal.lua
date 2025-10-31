@@ -46,31 +46,39 @@ function meta:PushDim()
 end
 
 function meta:PopAttribute()
-	if #self.attribute_stack == 0 then
+	local stack_len = #self.attribute_stack
+	if stack_len == 0 then
 		-- Stack is empty, reset all attributes
 		self:NoAttributes()
 		return
 	end
 
-	-- Remove the top attribute
-	table.remove(self.attribute_stack)
+	-- Remove the top attribute efficiently
+	self.attribute_stack[stack_len] = nil
 
 	-- Reset everything and reapply all remaining attributes
-	self:NoAttributes()
-	for _, attr in ipairs(self.attribute_stack) do
-		if attr.type == "fg" then
-			self:ForegroundColor(attr.r, attr.g, attr.b)
-		elseif attr.type == "bg" then
-			self:BackgroundColor(attr.r, attr.g, attr.b)
-		elseif attr.type == "bold" then
-			self:Bold()
-		elseif attr.type == "underline" then
-			self:Underline()
-		elseif attr.type == "italic" then
-			self:Italic()
-		elseif attr.type == "dim" then
-			self:Dim()
+	-- Only iterate if there are attributes to restore
+	if stack_len > 1 then
+		self:NoAttributes()
+		for i = 1, stack_len - 1 do
+			local attr = self.attribute_stack[i]
+			if attr.type == "fg" then
+				self:ForegroundColor(attr.r, attr.g, attr.b)
+			elseif attr.type == "bg" then
+				self:BackgroundColor(attr.r, attr.g, attr.b)
+			elseif attr.type == "bold" then
+				self:Bold()
+			elseif attr.type == "underline" then
+				self:Underline()
+			elseif attr.type == "italic" then
+				self:Italic()
+			elseif attr.type == "dim" then
+				self:Dim()
+			end
 		end
+	else
+		-- Last attribute removed, just reset
+		self:NoAttributes()
 	end
 end
 
@@ -125,13 +133,16 @@ function meta:Flush()
 end
 
 function meta:BeginFrame()
+	-- Pre-allocate table for better performance
 	self._frame_buffer = {}
+	self._frame_buffer_count = 0
 end
 
 function meta:EndFrame()
 	if self._frame_buffer then
-		local buffer = table.concat(self._frame_buffer)
+		local buffer = table.concat(self._frame_buffer, "", 1, self._frame_buffer_count)
 		self._frame_buffer = nil
+		self._frame_buffer_count = 0
 		self.output:write(buffer)
 		self.output:flush()
 	end
@@ -139,7 +150,9 @@ end
 
 function meta:Write(str)
 	if self._frame_buffer then
-		table.insert(self._frame_buffer, str)
+		local count = self._frame_buffer_count + 1
+		self._frame_buffer[count] = str
+		self._frame_buffer_count = count
 	else
 		self.output:write(str)
 	end
@@ -1399,23 +1412,70 @@ function meta:GetTerminalType()
 	end
 end
 
--- Base64 encoding helper
+-- Base64 encoding helper - optimized version using table for building result
 local function base64_encode(data)
 	local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-	return ((data:gsub('.', function(x) 
-		local r, b = '', x:byte()
-		for i = 8, 1, -1 do
-			r = r .. (b % 2^i - b % 2^(i-1) > 0 and '1' or '0')
-		end
-		return r
-	end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-		if #x < 6 then return '' end
-		local c = 0
-		for i = 1, 6 do
-			c = c + (x:sub(i, i) == '1' and 2^(6-i) or 0)
-		end
-		return b:sub(c+1, c+1)
-	end) .. ({ '', '==', '=' })[#data % 3 + 1])
+	local result = {}
+	local result_count = 0
+	
+	-- Process 3 bytes at a time for efficiency
+	local len = #data
+	local i = 1
+	
+	while i <= len - 2 do
+		local b1, b2, b3 = data:byte(i, i + 2)
+		
+		-- Convert 3 bytes to 4 base64 characters
+		local n = bit.bor(bit.lshift(b1, 16), bit.lshift(b2, 8), b3)
+		
+		-- Pre-compute indices to avoid redundant bit operations
+		local idx1 = bit.rshift(n, 18) + 1
+		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
+		local idx3 = bit.band(bit.rshift(n, 6), 0x3F) + 1
+		local idx4 = bit.band(n, 0x3F) + 1
+		
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx1, idx1)
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx2, idx2)
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx3, idx3)
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx4, idx4)
+		
+		i = i + 3
+	end
+	
+	-- Handle remaining bytes with padding
+	local remaining = len - i + 1
+	if remaining == 1 then
+		local b1 = data:byte(i)
+		local n = bit.lshift(b1, 16)
+		local idx1 = bit.rshift(n, 18) + 1
+		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx1, idx1)
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx2, idx2)
+		result_count = result_count + 1
+		result[result_count] = '=='
+	elseif remaining == 2 then
+		local b1, b2 = data:byte(i, i + 1)
+		local n = bit.bor(bit.lshift(b1, 16), bit.lshift(b2, 8))
+		local idx1 = bit.rshift(n, 18) + 1
+		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
+		local idx3 = bit.band(bit.rshift(n, 6), 0x3F) + 1
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx1, idx1)
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx2, idx2)
+		result_count = result_count + 1
+		result[result_count] = b:sub(idx3, idx3)
+		result_count = result_count + 1
+		result[result_count] = '='
+	end
+	
+	return table.concat(result, '', 1, result_count)
 end
 
 -- Write image to terminal
