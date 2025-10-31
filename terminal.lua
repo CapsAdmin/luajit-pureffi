@@ -1426,7 +1426,7 @@ local function base64_encode(data)
 		local b1, b2, b3 = data:byte(i, i + 2)
 		
 		-- Convert 3 bytes to 4 base64 characters
-		local n = bit.lshift(b1, 16) + bit.lshift(b2, 8) + b3
+		local n = bit.bor(bit.lshift(b1, 16), bit.lshift(b2, 8), b3)
 		
 		-- Pre-compute indices to avoid redundant bit operations
 		local idx1 = bit.rshift(n, 18) + 1
@@ -1461,7 +1461,7 @@ local function base64_encode(data)
 		result[result_count] = '=='
 	elseif remaining == 2 then
 		local b1, b2 = data:byte(i, i + 1)
-		local n = bit.lshift(b1, 16) + bit.lshift(b2, 8)
+		local n = bit.bor(bit.lshift(b1, 16), bit.lshift(b2, 8))
 		local idx1 = bit.rshift(n, 18) + 1
 		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
 		local idx3 = bit.band(bit.rshift(n, 6), 0x3F) + 1
