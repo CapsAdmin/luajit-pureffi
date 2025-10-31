@@ -277,14 +277,24 @@ do
 			local FORMAT_MESSAGE_IGNORE_INSERTS = 0x00000200
 			local flags = bit.bor(FORMAT_MESSAGE_IGNORE_INSERTS, FORMAT_MESSAGE_FROM_SYSTEM)
 			local cache = {}
+			local cache_size = 0
+			local MAX_CACHE_SIZE = 100  -- Limit cache growth
 
 			function socket.lasterror(num)
 				num = num or GetLastError()
 
 				if not cache[num] then
+					-- Prevent unbounded cache growth
+					if cache_size >= MAX_CACHE_SIZE then
+						-- Clear cache when limit reached
+						cache = {}
+						cache_size = 0
+					end
+					
 					local buffer = ffi.new("char[512]")
 					local len = FormatMessageA(flags, nil, num, 0, buffer, ffi.sizeof(buffer), nil)
 					cache[num] = ffi.string(buffer, len - 2)
+					cache_size = cache_size + 1
 				end
 
 				return cache[num], num
@@ -414,14 +424,23 @@ do
 		do
 			local strerror = load_c_function(ffi.C, "strerror", "const char *NAME(int errnum)")
 			local cache = {}
+			local cache_size = 0
+			local MAX_CACHE_SIZE = 100  -- Limit cache growth
 
 			function socket.lasterror(num, err_func)
 				err_func = err_func or strerror
 				num = num or ffi.errno()
 
 				if not cache[num] then
+					-- Prevent unbounded cache growth
+					if cache_size >= MAX_CACHE_SIZE then
+						cache = {}
+						cache_size = 0
+					end
+					
 					local err = ffi.string(err_func(num))
 					cache[num] = err == "" and tostring(num) or err
+					cache_size = cache_size + 1
 				end
 
 				return cache[num], num
@@ -1002,36 +1021,40 @@ function M.poll(socks, flags, timeout)
 	if flags then
 		-- On Windows, POLLERR and POLLHUP are output-only flags and cannot be requested
 		if ffi.os == "Windows" then
+			-- Use array indexing instead of table.insert for better performance
 			local filtered_flags = {}
+			local count = 0
 			for i, flag in ipairs(flags) do
 				if flag ~= "err" and flag ~= "hup" then
-					table.insert(filtered_flags, flag)
+					count = count + 1
+					filtered_flags[count] = flag
 				end
 			end
-			events = #filtered_flags > 0 and POLL.table_to_flags(filtered_flags, bit.bor) or 0
+			events = count > 0 and POLL.table_to_flags(filtered_flags, bit.bor) or 0
 		else
 			events = POLL.table_to_flags(flags, bit.bor)
 		end
 	end
 
-	-- Create pollfd array for all sockets
+	-- Create pollfd array for all sockets - pre-allocate for efficiency
+	local num_socks = #socks
 	local pfds = {}
-	for i, sock in ipairs(socks) do
+	for i = 1, num_socks do
 		pfds[i] = {
-			fd = sock.fd,
+			fd = socks[i].fd,
 			events = events,
 			revents = 0,
 		}
 	end
 	
 	local pfd = ffi.new(pollfd_box, pfds)
-	local ok, err = socket.poll(pfd, #socks, timeout or 0)
+	local ok, err = socket.poll(pfd, num_socks, timeout or 0)
 
 	if not ok then return ok, err end
 
 	-- Return array of results for each socket
 	local results = {}
-	for i = 0, #socks - 1 do
+	for i = 0, num_socks - 1 do
 		results[i + 1] = POLL.flags_to_table(pfd[i].revents, bit.bor)
 	end
 	

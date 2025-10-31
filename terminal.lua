@@ -125,13 +125,16 @@ function meta:Flush()
 end
 
 function meta:BeginFrame()
+	-- Pre-allocate table for better performance
 	self._frame_buffer = {}
+	self._frame_buffer_count = 0
 end
 
 function meta:EndFrame()
 	if self._frame_buffer then
-		local buffer = table.concat(self._frame_buffer)
+		local buffer = table.concat(self._frame_buffer, "", 1, self._frame_buffer_count)
 		self._frame_buffer = nil
+		self._frame_buffer_count = 0
 		self.output:write(buffer)
 		self.output:flush()
 	end
@@ -139,7 +142,9 @@ end
 
 function meta:Write(str)
 	if self._frame_buffer then
-		table.insert(self._frame_buffer, str)
+		local count = self._frame_buffer_count + 1
+		self._frame_buffer[count] = str
+		self._frame_buffer_count = count
 	else
 		self.output:write(str)
 	end
