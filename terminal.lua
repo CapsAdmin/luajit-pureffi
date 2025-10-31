@@ -1428,14 +1428,20 @@ local function base64_encode(data)
 		-- Convert 3 bytes to 4 base64 characters
 		local n = bit.lshift(b1, 16) + bit.lshift(b2, 8) + b3
 		
+		-- Pre-compute indices to avoid redundant bit operations
+		local idx1 = bit.rshift(n, 18) + 1
+		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
+		local idx3 = bit.band(bit.rshift(n, 6), 0x3F) + 1
+		local idx4 = bit.band(n, 0x3F) + 1
+		
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.rshift(n, 18) + 1, bit.rshift(n, 18) + 1)
+		result[result_count] = b:sub(idx1, idx1)
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.band(bit.rshift(n, 12), 0x3F) + 1, bit.band(bit.rshift(n, 12), 0x3F) + 1)
+		result[result_count] = b:sub(idx2, idx2)
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.band(bit.rshift(n, 6), 0x3F) + 1, bit.band(bit.rshift(n, 6), 0x3F) + 1)
+		result[result_count] = b:sub(idx3, idx3)
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.band(n, 0x3F) + 1, bit.band(n, 0x3F) + 1)
+		result[result_count] = b:sub(idx4, idx4)
 		
 		i = i + 3
 	end
@@ -1445,21 +1451,26 @@ local function base64_encode(data)
 	if remaining == 1 then
 		local b1 = data:byte(i)
 		local n = bit.lshift(b1, 16)
+		local idx1 = bit.rshift(n, 18) + 1
+		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.rshift(n, 18) + 1, bit.rshift(n, 18) + 1)
+		result[result_count] = b:sub(idx1, idx1)
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.band(bit.rshift(n, 12), 0x3F) + 1, bit.band(bit.rshift(n, 12), 0x3F) + 1)
+		result[result_count] = b:sub(idx2, idx2)
 		result_count = result_count + 1
 		result[result_count] = '=='
 	elseif remaining == 2 then
 		local b1, b2 = data:byte(i, i + 1)
 		local n = bit.lshift(b1, 16) + bit.lshift(b2, 8)
+		local idx1 = bit.rshift(n, 18) + 1
+		local idx2 = bit.band(bit.rshift(n, 12), 0x3F) + 1
+		local idx3 = bit.band(bit.rshift(n, 6), 0x3F) + 1
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.rshift(n, 18) + 1, bit.rshift(n, 18) + 1)
+		result[result_count] = b:sub(idx1, idx1)
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.band(bit.rshift(n, 12), 0x3F) + 1, bit.band(bit.rshift(n, 12), 0x3F) + 1)
+		result[result_count] = b:sub(idx2, idx2)
 		result_count = result_count + 1
-		result[result_count] = b:sub(bit.band(bit.rshift(n, 6), 0x3F) + 1, bit.band(bit.rshift(n, 6), 0x3F) + 1)
+		result[result_count] = b:sub(idx3, idx3)
 		result_count = result_count + 1
 		result[result_count] = '='
 	end
