@@ -294,10 +294,13 @@ if jit.arch ~= "Windows" then
 
 	do
 		ffi.cdef("char *getcwd(char *buf, size_t size);")
+		
+		-- Pre-allocate buffer for reuse across calls
+		local temp_buffer = ffi.new("char[1024]")
+		local buffer_size = ffi.sizeof(temp_buffer)
 
 		function fs.get_current_directory()
-			local temp = ffi.new("char[1024]")
-			return ffi.string(ffi.C.getcwd(temp, ffi.sizeof(temp)))
+			return ffi.string(ffi.C.getcwd(temp_buffer, buffer_size))
 		end
 	end
 else
@@ -494,11 +497,14 @@ else
 
 	do
 		ffi.cdef[[unsigned long GetCurrentDirectoryA(unsigned long, char *);]]
+		
+		-- Pre-allocate buffer for reuse
+		local temp_buffer = ffi.new("char[260]")
+		local buffer_size = 260
 
 		function fs.get_current_directory()
-			local buffer = ffi.new("char[260]")
-			local length = ffi.C.GetCurrentDirectoryA(260, buffer)
-			return ffi.string(buffer, length):gsub("\\", "/")
+			local length = ffi.C.GetCurrentDirectoryA(buffer_size, temp_buffer)
+			return ffi.string(temp_buffer, length):gsub("\\", "/")
 		end
 	end
 
