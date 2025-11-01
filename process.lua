@@ -241,33 +241,45 @@ if ffi.os == "Windows" then
 		
 		-- Close thread handle, we don't need it
 		ffi.C.CloseHandle(pi.hThread)
-		
+
 		local self = setmetatable({
 			handle = pi.hProcess,
 			pid = tonumber(pi.dwProcessId),
 			stdin = stdin_write,
 			stdout = stdout_read,
 			stderr = stderr_read,
+			exit_code = nil,  -- Cached exit code after wait
 		}, meta)
-		
+
 		return self
 	end
-	
+
 	function meta:wait()
+		-- Return cached exit code if already waited
+		if self.exit_code then
+			return self.exit_code
+		end
+
 		local result = ffi.C.WaitForSingleObject(self.handle, INFINITE)
 		if result ~= WAIT_OBJECT_0 then
 			return nil, lasterror()
 		end
-		
+
 		local exit_code = ffi.new("DWORD[1]")
 		if ffi.C.GetExitCodeProcess(self.handle, exit_code) == 0 then
 			return nil, lasterror()
 		end
-		
-		return tonumber(exit_code[0])
+
+		self.exit_code = tonumber(exit_code[0])
+		return self.exit_code
 	end
-	
+
 	function meta:try_wait()
+		-- Return cached exit code if already waited
+		if self.exit_code then
+			return true, self.exit_code
+		end
+
 		local result = ffi.C.WaitForSingleObject(self.handle, 0)
 		if result == WAIT_TIMEOUT then
 			return false
@@ -276,7 +288,8 @@ if ffi.os == "Windows" then
 			if ffi.C.GetExitCodeProcess(self.handle, exit_code) == 0 then
 				return nil, lasterror()
 			end
-			return true, tonumber(exit_code[0])
+			self.exit_code = tonumber(exit_code[0])
+			return true, self.exit_code
 		else
 			return nil, lasterror()
 		end
@@ -533,47 +546,60 @@ else
 			ffi.C._exit(127)
 		else
 			-- Parent process
-			
+
 			-- Close child ends of pipes
 			if stdin_pipe then ffi.C.close(stdin_pipe[0]) end
 			if stdout_pipe then ffi.C.close(stdout_pipe[1]) end
 			if stderr_pipe then ffi.C.close(stderr_pipe[1]) end
-			
+
 			local self = setmetatable({
 				pid = tonumber(pid),
 				stdin = stdin_pipe and stdin_pipe[1] or nil,
 				stdout = stdout_pipe and stdout_pipe[0] or nil,
 				stderr = stderr_pipe and stderr_pipe[0] or nil,
+				exit_code = nil,  -- Cached exit code after wait
 			}, meta)
-			
+
 			return self
 		end
 	end
-	
+
 	function meta:wait()
+		-- Return cached exit code if already waited
+		if self.exit_code then
+			return self.exit_code
+		end
+
 		local status = ffi.new("int[1]")
 		local ret = ffi.C.waitpid(self.pid, status, 0)
-		
+
 		if ret < 0 then
 			return nil, lasterror()
 		end
-		
+
 		-- Extract exit code from status
 		-- WIFEXITED(status) and WEXITSTATUS(status)
 		local exit_code = bit.rshift(bit.band(status[0], 0xFF00), 8)
+		self.exit_code = exit_code
 		return exit_code
 	end
-	
+
 	function meta:try_wait()
+		-- Return cached exit code if already waited
+		if self.exit_code then
+			return true, self.exit_code
+		end
+
 		local status = ffi.new("int[1]")
 		local ret = ffi.C.waitpid(self.pid, status, WNOHANG)
-		
+
 		if ret < 0 then
 			return nil, lasterror()
 		elseif ret == 0 then
 			return false
 		else
 			local exit_code = bit.rshift(bit.band(status[0], 0xFF00), 8)
+			self.exit_code = exit_code
 			return true, exit_code
 		end
 	end
