@@ -2,9 +2,9 @@ local ffi = require("ffi")
 local vk = require("vulkan")
 local lib = vk.find_library()
 local cocoa = require("cocoa")
-local pool, window, metal_layer = cocoa.init()
+local threads = require("threads")
 
-if metal_layer == nil then error("Failed to create Metal layer") end
+local wnd = cocoa.window()
 
 local function vk_assert(result, msg)
 	if result ~= 0 then
@@ -47,7 +47,7 @@ local surfaceCreateInfo = vk.VkMetalSurfaceCreateInfoEXT(
 		sType = "VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT",
 		pNext = nil,
 		flags = 0,
-		pLayer = ffi.cast("const void*", metal_layer),
+		pLayer = ffi.cast("const void*", assert(wnd:GetMetalLayer()), "failed to get metal layer"),
 	}
 )
 local surface = vk.Box(vk.VkSurfaceKHR)()
@@ -64,6 +64,12 @@ vk_assert(
 
 if deviceCount[0] == 0 then error("no physical devices found") end
 
-local NSApp = cocoa.objc_class("NSApplication")
-local app = cocoa.msg(NSApp, "sharedApplication")
-cocoa.msg(app, "run")
+wnd:Initialize()
+wnd:OpenWindow()
+
+-- Main event loop
+while not wnd:ShouldQuit() do
+	local events = wnd:ReadEvents()
+
+	threads.sleep(16)
+end

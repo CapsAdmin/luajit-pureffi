@@ -1,112 +1,112 @@
 local ffi = require("ffi")
+local objc = require("objc")
 local cocoa = {}
-ffi.cdef[[
-    // Objective-C runtime
-    typedef struct objc_class *Class;
-    typedef struct objc_object *id;
-    typedef struct objc_selector *SEL;
-    typedef id (*IMP)(id, SEL, ...);
-    typedef unsigned long NSUInteger;
-    typedef long NSInteger;
-    
-    id objc_getClass(const char *name);
-    SEL sel_registerName(const char *str);
-    id objc_msgSend(id self, SEL op, ...);
-    void objc_msgSend_stret(void *stretAddr, id self, SEL op, ...);
-    id objc_retain(id obj);
-    void objc_release(id obj);
-    Class objc_allocateClassPair(Class superclass, const char *name, size_t extraBytes);
-    void objc_registerClassPair(Class cls);
-    bool class_addMethod(Class cls, SEL name, IMP imp, const char *types);
-    
-    // CoreGraphics types
-    typedef struct CGPoint { double x; double y; } CGPoint;
-    typedef struct CGSize { double width; double height; } CGSize;
-    typedef struct CGRect { CGPoint origin; CGSize size; } CGRect;
-]]
-local objc = ffi.load("/usr/lib/libobjc.A.dylib")
-
-local function objc_class(name)
-    return objc.objc_getClass(name)
-end
-
-local function sel(name)
-    return objc.sel_registerName(name)
-end
-
-local function msg(obj, selector, ...)
-    return objc.objc_msgSend(obj, sel(selector), ...)
-end
-
--- For methods that return structures
-local function msg_stret(ret_ptr, obj, selector, ...)
-    objc.objc_msgSend_stret(ret_ptr, obj, sel(selector), ...)
-end
+-- Load required frameworks
+objc.loadFramework("Cocoa")
+objc.loadFramework("QuartzCore")
 
 local function CGRectMake(x, y, width, height)
     return ffi.new("CGRect", {{x, y}, {width, height}})
 end
 
--- Store references to prevent garbage collection
-local metal_layer = nil
-local window = nil
-
 -- Initialize Cocoa application and create window
 local function init_cocoa()
-    print("Creating autorelease pool...")
-    local NSAutoreleasePool = objc_class("NSAutoreleasePool")
-    local pool = msg(msg(NSAutoreleasePool, "alloc"), "init")
-    print("Getting NSApplication...")
-    local NSApp = msg(objc_class("NSApplication"), "sharedApplication")
-    print("Activating app...")
-    msg(NSApp, "setActivationPolicy:", 0) -- NSApplicationActivationPolicyRegular
-    msg(NSApp, "activateIgnoringOtherApps:", true)
-    print("Creating window...")
-    local NSWindow = objc_class("NSWindow")
+    local pool = objc.NSAutoreleasePool:alloc():init()
+    local app = objc.NSApplication:sharedApplication()
+    app:setActivationPolicy_(0) -- NSApplicationActivationPolicyRegular
+    app:activateIgnoringOtherApps_(true)
+
     local frame = CGRectMake(100, 100, 800, 600)
-    -- Window style mask: titled, closable, resizable, miniaturizable
     local styleMask = bit.bor(1, 2, 4, 8) -- Titled | Closable | Miniaturizable | Resizable
-    -- Allocate window
-    local window_alloc = msg(NSWindow, "alloc")
-    print("Window allocated:", window_alloc)
-    -- Initialize with contentRect - pass args explicitly
-    window = ffi.cast("id(*)(id, SEL, CGRect, NSUInteger, NSUInteger, bool)", objc.objc_msgSend)(
-        window_alloc,
-        sel("initWithContentRect:styleMask:backing:defer:"),
+
+    local window = objc.NSWindow:alloc():initWithContentRect_styleMask_backing_defer_(
         frame,
-        ffi.cast("NSUInteger", styleMask),
-        ffi.cast("NSUInteger", 2),
+        styleMask,
+        2, -- NSBackingStoreBuffered
         false
     )
-    print("Window initialized:", window)
-    print("Setting window title...")
-    local NSString = objc_class("NSString")
-    local title_cstr = "MoltenVK LuaJIT Window"
-    local title = ffi.cast("id(*)(id, SEL, const char*)", objc.objc_msgSend)(NSString, sel("stringWithUTF8String:"), title_cstr)
-    print("Title created:", title)
-    ffi.cast("void(*)(id, SEL, id)", objc.objc_msgSend)(window, sel("setTitle:"), title)
-    print("Title set!")
-    print("Making window visible...")
-    msg(window, "makeKeyAndOrderFront:", nil)
-    print("Getting content view...")
-    local contentView = msg(window, "contentView")
-    print("Creating CAMetalLayer...")
-    local CAMetalLayer = objc_class("CAMetalLayer")
-    metal_layer = msg(CAMetalLayer, "layer")
-    print("Setting metal layer...")
-    msg(contentView, "setWantsLayer:", true)
-    msg(contentView, "setLayer:", metal_layer)
-    print("Retaining objects...")
-    objc.objc_retain(window)
-    objc.objc_retain(metal_layer)
-    print("Cocoa initialization complete!")
-    return pool, window, metal_layer
+
+    window:setTitle_(objc.NSString:stringWithUTF8String_("MoltenVK LuaJIT Window"))
+    -- Use msgSend directly with explicit NULL pointer
+    objc.msgSend(window, "makeKeyAndOrderFront:", ffi.cast("id", 0))
+
+    -- Use msgSend directly for contentView to avoid property lookup
+    local contentView = objc.msgSend(window, "contentView")
+    local metal_layer = objc.CAMetalLayer:layer()
+    contentView:setWantsLayer_(true)
+    contentView:setLayer_(metal_layer)
+
+    return window, metal_layer
 end
 
-return {
-    objc = objc,
-    init = init_cocoa,
-    msg = msg,
-    sel = sel,
-    objc_class = objc_class,
-}
+-- Event loop helpers
+local function poll_events(app)
+    -- Create fresh objects each iteration (they're lightweight singletons)
+    local distantPast = objc.NSDate:distantPast()
+    local mode = objc.NSString:stringWithUTF8String_("kCFRunLoopDefaultMode")
+
+    -- Poll for events without blocking
+    local event = app:nextEventMatchingMask_untilDate_inMode_dequeue_(
+        0xFFFFFFFFFFFFFFFFULL,  -- NSEventMaskAny
+        distantPast,
+        mode,
+        true -- dequeue
+    )
+
+    if event ~= nil and event ~= objc.ptr(nil) then
+        app:sendEvent_(event)
+        app:updateWindows()
+        return true
+    end
+
+    return false
+end
+
+local function should_quit(window)
+    if window == nil then return true end
+    -- isVisible returns a BOOL (which the metatype handles)
+    return not window:isVisible()
+end
+
+-- Helper to get the NSApplication singleton
+local function get_app()
+    return objc.NSApplication:sharedApplication()
+end
+
+local meta = {}
+meta.__index = meta
+
+function cocoa.window()
+    local self = setmetatable({}, meta)
+    self.window, self.metal_layer = init_cocoa()
+    return self
+end
+
+function meta:Initialize()
+    self.app = get_app()
+
+    self.app:finishLaunching()
+end
+
+function meta:OpenWindow()
+    self.window:makeKeyAndOrderFront_(ffi.cast("id", 0))
+    self.app:activateIgnoringOtherApps_(true)
+end
+
+function meta:GetMetalLayer()
+    return self.metal_layer
+end
+
+function meta:ShouldQuit()
+    return should_quit(self.window)
+end
+
+function meta:ReadEvents()
+    while poll_events(self.app) do
+        return {} -- TODO: return actual events
+    end
+
+    return nil
+end
+
+return cocoa
