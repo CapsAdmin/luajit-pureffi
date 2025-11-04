@@ -1,5 +1,5 @@
 local ffi = require("ffi")
-local vk = require("vulkan")
+local vk = require("vk")
 local lib = vk.find_library()
 local appInfo = vk.Box(
 	vk.VkApplicationInfo,
