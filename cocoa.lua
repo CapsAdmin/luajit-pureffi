@@ -33,6 +33,11 @@ local function init_cocoa()
     -- Use msgSend directly for contentView to avoid property lookup
     local contentView = objc.msgSend(window, "contentView")
     local metal_layer = objc.CAMetalLayer:layer()
+
+    -- Set initial drawable size to match the content view bounds
+    local bounds = objc.msgSend(contentView, "bounds")
+    metal_layer:setDrawableSize_(bounds.size)
+
     contentView:setWantsLayer_(true)
     contentView:setLayer_(metal_layer)
 
@@ -40,7 +45,7 @@ local function init_cocoa()
 end
 
 -- Event loop helpers
-local function poll_events(app)
+local function poll_events(app, window)
     -- Create fresh objects each iteration (they're lightweight singletons)
     local distantPast = objc.NSDate:distantPast()
     local mode = objc.NSString:stringWithUTF8String_("kCFRunLoopDefaultMode")
@@ -62,12 +67,6 @@ local function poll_events(app)
     return false
 end
 
-local function should_quit(window)
-    if window == nil then return true end
-    -- isVisible returns a BOOL (which the metatype handles)
-    return not window:isVisible()
-end
-
 -- Helper to get the NSApplication singleton
 local function get_app()
     return objc.NSApplication:sharedApplication()
@@ -79,6 +78,9 @@ meta.__index = meta
 function cocoa.window()
     local self = setmetatable({}, meta)
     self.window, self.metal_layer = init_cocoa()
+    self.last_width = nil
+    self.last_height = nil
+    self.close_requested = false
     return self
 end
 
@@ -97,16 +99,44 @@ function meta:GetMetalLayer()
     return self.metal_layer
 end
 
-function meta:ShouldQuit()
-    return should_quit(self.window)
-end
-
 function meta:ReadEvents()
-    while poll_events(self.app) do
-        return {} -- TODO: return actual events
+    while poll_events(self.app, self.window) do
+        -- Process events
     end
 
-    return nil
+    -- Poll for window size changes
+    local events = {}
+    local window_frame = objc.msgSend(self.window, "frame")
+    local current_width = tonumber(window_frame.size.width)
+    local current_height = tonumber(window_frame.size.height)
+
+    -- Initialize on first call
+    if self.last_width == nil then
+        self.last_width = current_width
+        self.last_height = current_height
+    elseif current_width ~= self.last_width or current_height ~= self.last_height then
+        events.window_resized = true
+        self.last_width = current_width
+        self.last_height = current_height
+
+        -- Update metal layer drawable size
+        local content_view = objc.msgSend(self.window, "contentView")
+        local bounds = objc.msgSend(content_view, "bounds")
+        self.metal_layer:setDrawableSize_(bounds.size)
+    end
+
+    -- Check if window is closing (no longer visible)
+    local isVisible = objc.msgSend(self.window, "isVisible")
+    if not isVisible or isVisible == 0 then
+        events.window_close_requested = true
+    end
+
+    return events
+end
+
+function meta:GetWindowSize()
+    local window_frame = objc.msgSend(self.window, "frame")
+    return tonumber(window_frame.size.width), tonumber(window_frame.size.height)
 end
 
 return cocoa

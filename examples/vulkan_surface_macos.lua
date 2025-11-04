@@ -45,9 +45,27 @@ local function hsv_to_rgb(h, s, v)
 	return r + m, g + m, b + m
 end
 
-while not wnd:ShouldQuit() do
+while true do
 	local events = wnd:ReadEvents()
-	local commandBuffer, imageIndex, swapchainImages = renderer:BeginFrame()
+
+	-- Handle window close
+	if events.window_close_requested then
+		print("Window close requested")
+		break
+	end
+
+	-- Handle window resize
+	if events.window_resized then
+		print("Window resized, recreating swapchain...")
+		renderer:RecreateSwapchain()
+	end
+
+	local commandBuffer, imageIndex, swapchainImages, status = renderer:BeginFrame()
+
+	-- Skip frame if swapchain was recreated
+	if status == "out_of_date" then
+		goto continue
+	end
 
 	do -- rendering
 		local range = vk.Box(
@@ -75,6 +93,7 @@ while not wnd:ShouldQuit() do
 	renderer:EndFrame()
 	frame = frame + 0.01
 	threads.sleep(1)
+	::continue::
 end
 
 -- Cleanup

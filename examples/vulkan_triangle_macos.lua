@@ -26,44 +26,53 @@ renderer:CreateFramebuffers()
 
 local pipelineLayout = renderer.device:CreatePipelineLayout()
 
-local extent = renderer:GetExtent()
-local pipeline = renderer.device:CreateGraphicsPipeline({
-	vertShaderModule = renderer.device:CreateShaderModule([[
-        #version 450
+-- Shader source code (stored for pipeline recreation)
+local vertShaderSource = [[
+    #version 450
 
-        vec2 positions[3] = vec2[](
-            vec2(0.0, -0.5),
-            vec2(0.5, 0.5),
-            vec2(-0.5, 0.5)
-        );
+    vec2 positions[3] = vec2[](
+        vec2(0.0, -0.5),
+        vec2(0.5, 0.5),
+        vec2(-0.5, 0.5)
+    );
 
-        vec3 colors[3] = vec3[](
-            vec3(1.0, 0.0, 0.0),
-            vec3(0.0, 1.0, 0.0),
-            vec3(0.0, 0.0, 1.0)
-        );
+    vec3 colors[3] = vec3[](
+        vec3(1.0, 0.0, 0.0),
+        vec3(0.0, 1.0, 0.0),
+        vec3(0.0, 0.0, 1.0)
+    );
 
-        layout(location = 0) out vec3 fragColor;
+    layout(location = 0) out vec3 fragColor;
 
-        void main() {
-            gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-            fragColor = colors[gl_VertexIndex];
-        }
-    ]], "vertex"),
-	fragShaderModule = renderer.device:CreateShaderModule([[
-        #version 450
+    void main() {
+        gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+        fragColor = colors[gl_VertexIndex];
+    }
+]]
 
-        layout(location = 0) in vec3 fragColor;
-        layout(location = 0) out vec4 outColor;
+local fragShaderSource = [[
+    #version 450
 
-        void main() {
-            outColor = vec4(fragColor, 1.0);
-        }
-    ]], "fragment"),
-	pipelineLayout = pipelineLayout,
-	renderPass = renderPass,
-	extent = extent,
-})
+    layout(location = 0) in vec3 fragColor;
+    layout(location = 0) out vec4 outColor;
+
+    void main() {
+        outColor = vec4(fragColor, 1.0);
+    }
+]]
+
+local function createPipeline()
+	local extent = renderer:GetExtent()
+	return renderer.device:CreateGraphicsPipeline({
+		vertShaderModule = renderer.device:CreateShaderModule(vertShaderSource, "vertex"),
+		fragShaderModule = renderer.device:CreateShaderModule(fragShaderSource, "fragment"),
+		pipelineLayout = pipelineLayout,
+		renderPass = renderPass,
+		extent = extent,
+	})
+end
+
+local pipeline = createPipeline()
 
 print("Graphics pipeline created successfully")
 
@@ -74,9 +83,43 @@ wnd:OpenWindow()
 local frame = 0
 
 -- Main render loop
-while not wnd:ShouldQuit() do
+while true do
 	local events = wnd:ReadEvents()
-	local commandBuffer, imageIndex, swapchainImages = renderer:BeginFrame(true)
+
+	-- Handle window close
+	if events.window_close_requested then
+		print("Window close requested")
+		break
+	end
+
+	-- Handle window resize
+	if events.window_resized then
+		print("Window resized, recreating swapchain and pipeline...")
+		renderer:RecreateSwapchain()
+
+		-- Destroy old pipeline
+		lib.vkDestroyPipeline(renderer.device.ptr[0], pipeline.ptr[0], nil)
+
+		-- Create new pipeline with updated extent
+		pipeline = createPipeline()
+	end
+
+	local commandBuffer, imageIndex, swapchainImages, status = renderer:BeginFrame(true)
+
+	-- Recreate pipeline if swapchain was recreated
+	if status == "out_of_date" then
+		-- Destroy old pipeline
+		lib.vkDestroyPipeline(renderer.device.ptr[0], pipeline.ptr[0], nil)
+
+		-- Create new pipeline with updated extent
+		pipeline = createPipeline()
+
+		-- Skip this frame
+		goto continue
+	end
+
+	-- Get current extent for render pass
+	local extent = renderer:GetExtent()
 
 	-- Begin render pass with clear color
 	commandBuffer:BeginRenderPass(
@@ -93,9 +136,20 @@ while not wnd:ShouldQuit() do
 	-- End render pass
 	commandBuffer:EndRenderPass()
 
-	renderer:EndFrame(true)
+	local present_status = renderer:EndFrame(true)
+
+	-- Recreate pipeline if swapchain was recreated
+	if present_status == "out_of_date" or present_status == "suboptimal" then
+		-- Destroy old pipeline
+		lib.vkDestroyPipeline(renderer.device.ptr[0], pipeline.ptr[0], nil)
+
+		-- Create new pipeline with updated extent
+		pipeline = createPipeline()
+	end
+
 	frame = frame + 1
 	threads.sleep(1)
+	::continue::
 end
 
 -- Cleanup

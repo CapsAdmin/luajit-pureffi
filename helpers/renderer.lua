@@ -205,19 +205,26 @@ function Renderer:BeginFrame(use_render_pass)
 	-- Wait for previous frame
 	self.in_flight_fence:Wait()
 	-- Acquire next image
-	self.image_index = self.swapchain:GetNextImage(self.image_available_semaphore)
+	self.image_index, self.acquire_status = self.swapchain:GetNextImage(self.image_available_semaphore)
+
+	-- Check if swapchain needs recreation
+	if self.acquire_status == "out_of_date" or self.image_index == nil then
+		self:RecreateSwapchain()
+		return nil, nil, nil, "out_of_date"
+	end
+
 	-- Reset and begin command buffer
 	self.command_buffer:Reset()
 	self.command_buffer:Begin()
 
 	if use_render_pass then
 		-- For render pass mode, no image barrier needed - handled by render pass
-		return self.command_buffer, self.image_index, self.swapchain_images
+		return self.command_buffer, self.image_index, self.swapchain_images, self.acquire_status
 	else
 		-- Transition image to transfer dst
 		self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
 		self.command_buffer:StartPipelineBarrier(self.barrier)
-		return self.command_buffer, self.image_index, self.swapchain_images
+		return self.command_buffer, self.image_index, self.swapchain_images, self.acquire_status
 	end
 end
 
@@ -236,7 +243,75 @@ function Renderer:EndFrame(use_render_pass)
 		self.in_flight_fence
 	)
 	-- Present
-	self.swapchain:Present(self.render_finished_semaphore, self.queue, self.image_index)
+	local present_status = self.swapchain:Present(self.render_finished_semaphore, self.queue, self.image_index)
+
+	-- Recreate swapchain if needed
+	if present_status == "out_of_date" or present_status == "suboptimal" then
+		self:RecreateSwapchain()
+	end
+
+	return present_status
+end
+
+function Renderer:RecreateSwapchain()
+	-- Wait for device to be idle before recreating
+	lib.vkDeviceWaitIdle(self.device.ptr[0])
+
+	-- Clean up old framebuffers and image views
+	for _, framebuffer in ipairs(self.framebuffers) do
+		lib.vkDestroyFramebuffer(self.device.ptr[0], framebuffer.ptr[0], nil)
+	end
+	self.framebuffers = {}
+
+	for _, imageView in ipairs(self.image_views) do
+		lib.vkDestroyImageView(self.device.ptr[0], imageView.ptr[0], nil)
+	end
+	self.image_views = {}
+
+	-- Destroy old swapchain
+	lib.vkDestroySwapchainKHR(self.device.ptr[0], self.swapchain.ptr[0], nil)
+
+	-- Re-query surface capabilities (they may have changed)
+	self.surface_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
+
+	-- Build swapchain config
+	local swapchain_config = {
+		present_mode = self.config.present_mode,
+		image_count = self.config.image_count or (self.surface_capabilities[0].minImageCount + 1),
+		composite_alpha = self.config.composite_alpha,
+		clipped = self.config.clipped,
+		image_usage = self.config.image_usage,
+		pre_transform = self.config.pre_transform,
+	}
+
+	-- Create new swapchain
+	self.swapchain = self.device:CreateSwapchain(
+		self.surface,
+		self.surface_formats[self.config.surface_format_index],
+		self.surface_capabilities,
+		swapchain_config
+	)
+	self.swapchain_images = self.swapchain:GetImages()
+
+	-- Update image count
+	local imageCount = ffi.new("uint32_t[1]", 0)
+	lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.swapchain.ptr[0], imageCount, nil)
+	self.swapchain_image_count = imageCount[0]
+
+	-- Recreate image views if they were created before
+	if self.render_pass then
+		self:CreateImageViews()
+		self:CreateFramebuffers()
+	end
+end
+
+function Renderer:NeedsRecreation()
+	-- Check if current extent has changed
+	local new_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
+	local old_extent = self.surface_capabilities[0].currentExtent
+	local new_extent = new_capabilities[0].currentExtent
+
+	return old_extent.width ~= new_extent.width or old_extent.height ~= new_extent.height
 end
 
 function Renderer:cleanup()

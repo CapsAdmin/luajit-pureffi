@@ -357,18 +357,26 @@ do -- instance
 
 				function Swapchain:GetNextImage(imageAvailableSemaphore)
 					local imageIndex = ffi.new("uint32_t[1]", 0)
-					vk_assert(
-						lib.vkAcquireNextImageKHR(
-							self.device.ptr[0],
-							self.ptr[0],
-							ffi.cast("uint64_t", -1),
-							imageAvailableSemaphore.ptr[0],
-							nil,
-							imageIndex
-						),
-						"failed to acquire next image"
+					local result = lib.vkAcquireNextImageKHR(
+						self.device.ptr[0],
+						self.ptr[0],
+						ffi.cast("uint64_t", -1),
+						imageAvailableSemaphore.ptr[0],
+						nil,
+						imageIndex
 					)
-					return imageIndex
+
+					-- VK_ERROR_OUT_OF_DATE_KHR = -1000001004
+					-- VK_SUBOPTIMAL_KHR = 1000001003
+					if result == -1000001004 then
+						return nil, "out_of_date"
+					elseif result == 1000001003 then
+						return imageIndex, "suboptimal"
+					elseif result ~= 0 then
+						error("failed to acquire next image: " .. vk.EnumToString(result))
+					end
+
+					return imageIndex, "ok"
 				end
 
 				function Swapchain:Present(renderFinishedSemaphore, deviceQueue, imageIndex)
@@ -383,7 +391,19 @@ do -- instance
 							pImageIndices = imageIndex,
 						}
 					)
-					lib.vkQueuePresentKHR(deviceQueue.ptr[0], presentInfo)
+					local result = lib.vkQueuePresentKHR(deviceQueue.ptr[0], presentInfo)
+
+					-- VK_ERROR_OUT_OF_DATE_KHR = -1000001004
+					-- VK_SUBOPTIMAL_KHR = 1000001003
+					if result == -1000001004 then
+						return "out_of_date"
+					elseif result == 1000001003 then
+						return "suboptimal"
+					elseif result ~= 0 then
+						error("failed to present: " .. vk.EnumToString(result))
+					end
+
+					return "ok"
 				end
 			end
 
