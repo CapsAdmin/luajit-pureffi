@@ -380,6 +380,30 @@ do -- instance
 						lib.vkResetCommandBuffer(self.ptr[0], 0)
 					end
 
+					function meta_commandBuffer:CreateImageMemoryBarrier(imageIndex, swapchainImages)
+						local barrier = vk.Box(
+							vk.VkImageMemoryBarrier,
+							{
+								sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
+								oldLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
+								newLayout = "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+								srcQueueFamilyIndex = 0xFFFFFFFF,
+								dstQueueFamilyIndex = 0xFFFFFFFF,
+								image = swapchainImages[imageIndex[0]],
+								subresourceRange = {
+									aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+									baseMipLevel = 0,
+									levelCount = 1,
+									baseArrayLayer = 0,
+									layerCount = 1,
+								},
+								srcAccessMask = 0,
+								dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_TRANSFER_WRITE_BIT"),
+							}
+						)
+						return barrier
+					end
+
 					function meta_commandBuffer:StartPipelineBarrier(barrier)
 						lib.vkCmdPipelineBarrier(
 							self.ptr[0],
@@ -473,32 +497,6 @@ do -- instance
 				end
 			end
 		end
-	end
-end
-
-do -- rendering
-	function vulkan.ImageMemoryBarrier(imageIndex, swapchainImages)
-		local barrier = vk.Box(
-			vk.VkImageMemoryBarrier,
-			{
-				sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
-				oldLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
-				newLayout = "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
-				srcQueueFamilyIndex = 0xFFFFFFFF,
-				dstQueueFamilyIndex = 0xFFFFFFFF,
-				image = swapchainImages[imageIndex[0]],
-				subresourceRange = {
-					aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-					baseMipLevel = 0,
-					levelCount = 1,
-					baseArrayLayer = 0,
-					layerCount = 1,
-				},
-				srcAccessMask = 0,
-				dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_TRANSFER_WRITE_BIT"),
-			}
-		)
-		return barrier
 	end
 end
 

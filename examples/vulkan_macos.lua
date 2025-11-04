@@ -30,7 +30,7 @@ while not wnd:ShouldQuit() do
 	local imageIndex = swapchain:GetNextImage(imageAvailableSemaphore)
 	commandBuffer:Reset()
 	commandBuffer:Begin()
-	local barrier = vulkan.ImageMemoryBarrier(imageIndex, swapchainImages)
+	local barrier = commandBuffer:CreateImageMemoryBarrier(imageIndex, swapchainImages)
 	commandBuffer:StartPipelineBarrier(barrier)
 
 	do
