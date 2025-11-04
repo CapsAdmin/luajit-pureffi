@@ -131,6 +131,9 @@ local function sel(name, num_args)
 	return C.sel_registerName(name) -- pointer is never NULL
 end
 
+-- Cache for casted function pointers to avoid table overflow
+local msgSend_cache = {}
+
 ---call a method for a SEL on a Class or object
 ---@param self string | Class | id the class or object
 ---@param selector string | SEL name of method
@@ -198,8 +201,15 @@ local function msgSend(self, selector, ...)
 	end
 
 	table.insert(signature, ")")
-	local signature = table.concat(signature) ---@diagnostic disable-line: redefined-local
-	return ptr(ffi.cast(signature, C.objc_msgSend)(unpack(call_args, 1, call_args.n)))
+	local signature_str = table.concat(signature)
+
+	local func = msgSend_cache[signature_str]
+	if not func then
+		func = ffi.cast(signature_str, C.objc_msgSend)
+		msgSend_cache[signature_str] = func
+	end
+
+	return ptr(func(unpack(call_args, 1, call_args.n)))
 end
 
 ---load a Framework
