@@ -17,42 +17,116 @@ local renderer = Renderer.New(
 	}
 )
 local pipeline
+local vertexBuffer
+local uniformBuffer
+local descriptorSetLayout
+local descriptorPool
+local descriptorSet
+local pipelineLayout
+
+-- Create vertex buffer with position and color data
+do
+	-- Vertex data: position (vec2) + color (vec3) = 5 floats per vertex, 3 vertices
+	local vertices = ffi.new(
+		"float[15]",
+		{
+			-- bottom-left (red)
+			0.0, -- x
+			-0.5, -- y
+			1.0, -- r
+			0.0, -- g
+			0.0, -- b
+			-- top (blue)
+			0.5, 
+			0.5, 
+			0.0,
+			1.0,
+			0.0,
+			-- bottom-right (green)
+			-0.5,
+			0.5,
+			0.0,
+			0.0,
+			1.0, 
+		}
+	)
+	local bufferSize = ffi.sizeof(vertices)
+	vertexBuffer = renderer.device:CreateBuffer(
+		bufferSize,
+		vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_VERTEX_BUFFER_BIT"),
+		bit.bor(
+			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT"),
+			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT")
+		)
+	)
+	-- Copy vertex data to buffer
+	vertexBuffer:CopyData(vertices, bufferSize)
+end
+
+-- Create uniform buffer for color multiplier
+do
+	local bufferSize = ffi.sizeof("float") * 4 -- vec4
+	uniformBuffer = renderer.device:CreateBuffer(
+		bufferSize,
+		vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT"),
+		bit.bor(
+			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT"),
+			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT")
+		)
+	)
+	-- Initialize uniform buffer with white color multiplier
+	local colorData = ffi.new("float[4]", {1.0, 1.0, 1.0, 1.0})
+	uniformBuffer:CopyData(colorData, bufferSize)
+end
 
 do
 	local renderPass = renderer:CreateRenderPass()
 	renderer:CreateImageViews()
 	renderer:CreateFramebuffers()
-	local pipelineLayout = renderer.device:CreatePipelineLayout()
+	-- Create descriptor set layout for uniform buffer
+	descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(
+		{
+			{
+				binding = 0,
+				type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+				stageFlags = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT"),
+				count = 1,
+			},
+		}
+	)
+	-- Create pipeline layout with descriptor set layout
+	pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
+	-- Create descriptor pool
+	descriptorPool = renderer.device:CreateDescriptorPool({{type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", count = 1}}, 1)
+	-- Allocate descriptor set
+	descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
+	-- Update descriptor set to point to uniform buffer
+	renderer.device:UpdateDescriptorSet(descriptorSet, 0, uniformBuffer)
 	local vertShaderSource = [[
 		#version 450
 
-		vec2 positions[3] = vec2[](
-			vec2(0.0, -0.5),
-			vec2(0.5, 0.5),
-			vec2(-0.5, 0.5)
-		);
-
-		vec3 colors[3] = vec3[](
-			vec3(1.0, 0.0, 0.0),
-			vec3(0.0, 1.0, 0.0),
-			vec3(0.0, 0.0, 1.0)
-		);
+		layout(location = 0) in vec2 inPosition;
+		layout(location = 1) in vec3 inColor;
 
 		layout(location = 0) out vec3 fragColor;
 
 		void main() {
-			gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-			fragColor = colors[gl_VertexIndex];
+			gl_Position = vec4(inPosition, 0.0, 1.0);
+			fragColor = inColor;
 		}
 	]]
 	local fragShaderSource = [[
 		#version 450
 
+		layout(binding = 0) uniform ColorUniform {
+			vec4 colorMultiplier;
+		} ubo;
+
 		layout(location = 0) in vec3 fragColor;
 		layout(location = 0) out vec4 outColor;
 
 		void main() {
-			outColor = vec4(fragColor, 1.0);
+			outColor = vec4(fragColor, 1.0) * ubo.colorMultiplier;
 		}
 	]]
 
@@ -65,6 +139,27 @@ do
 				pipelineLayout = pipelineLayout,
 				renderPass = renderPass,
 				extent = extent,
+				vertexBindings = {
+					{
+						binding = 0,
+						stride = ffi.sizeof("float") * 5, -- vec2 + vec3
+						inputRate = "VK_VERTEX_INPUT_RATE_VERTEX",
+					},
+				},
+				vertexAttributes = {
+					{
+						location = 0,
+						binding = 0,
+						format = "VK_FORMAT_R32G32_SFLOAT", -- vec2
+						offset = 0,
+					},
+					{
+						location = 1,
+						binding = 0,
+						format = "VK_FORMAT_R32G32B32_SFLOAT", -- vec3
+						offset = ffi.sizeof("float") * 2,
+					},
+				},
 			}
 		)
 	end
@@ -90,6 +185,8 @@ while true do
 		local cmd = renderer:GetCommandBuffer()
 		cmd:BeginRenderPass(renderer.render_pass, renderer:GetFramebuffer(), extent, {0.0, 0.0, 0.0, 1.0})
 		cmd:BindPipeline(pipeline)
+		cmd:BindVertexBuffers(0, {vertexBuffer})
+		cmd:BindDescriptorSets(pipelineLayout, {descriptorSet}, 0)
 		cmd:Draw(3, 1, 0, 0)
 		cmd:EndRenderPass()
 		renderer:EndFrame()

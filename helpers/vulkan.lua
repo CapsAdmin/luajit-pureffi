@@ -305,7 +305,7 @@ do -- instance
 					lib.vkCreateDevice(self.ptr, deviceCreateInfo, nil, ptr),
 					"failed to create device"
 				)
-				return setmetatable({ptr = ptr}, Device)
+				return setmetatable({ptr = ptr, physical_device = self}, Device)
 			end
 
 			function Device:__gc()
@@ -681,6 +681,48 @@ do -- instance
 						)
 					end
 
+					function CommandBuffer:BindVertexBuffers(firstBinding, buffers, offsets)
+						-- buffers is an array of Buffer objects
+						-- offsets is optional array of offsets
+						local bufferCount = #buffers
+						local bufferArray = vk.Array(vk.VkBuffer)(bufferCount)
+						local offsetArray = vk.Array(vk.VkDeviceSize)(bufferCount)
+
+						for i, buffer in ipairs(buffers) do
+							bufferArray[i-1] = buffer.ptr[0]
+							offsetArray[i-1] = offsets and offsets[i] or 0
+						end
+
+						lib.vkCmdBindVertexBuffers(
+							self.ptr[0],
+							firstBinding or 0,
+							bufferCount,
+							bufferArray,
+							offsetArray
+						)
+					end
+
+					function CommandBuffer:BindDescriptorSets(pipelineLayout, descriptorSets, firstSet)
+						-- descriptorSets is an array of descriptor set objects
+						local setCount = #descriptorSets
+						local setArray = vk.Array(vk.VkDescriptorSet)(setCount)
+
+						for i, ds in ipairs(descriptorSets) do
+							setArray[i-1] = ds.ptr[0]
+						end
+
+						lib.vkCmdBindDescriptorSets(
+							self.ptr[0],
+							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_GRAPHICS"),
+							pipelineLayout.ptr[0],
+							firstSet or 0,
+							setCount,
+							setArray,
+							0,
+							nil
+						)
+					end
+
 					function CommandBuffer:Draw(vertexCount, instanceCount, firstVertex, firstInstance)
 						lib.vkCmdDraw(
 							self.ptr[0],
@@ -691,6 +733,190 @@ do -- instance
 						)
 					end
 				end
+			end
+
+			do -- buffer
+				local Buffer = {}
+				Buffer.__index = Buffer
+
+				function Device:FindMemoryType(typeFilter, properties)
+					local memProperties = vk.Box(vk.VkPhysicalDeviceMemoryProperties)()
+					lib.vkGetPhysicalDeviceMemoryProperties(self.physical_device.ptr, memProperties)
+
+					for i = 0, memProperties[0].memoryTypeCount - 1 do
+						if bit.band(typeFilter, bit.lshift(1, i)) ~= 0 and
+						   bit.band(memProperties[0].memoryTypes[i].propertyFlags, properties) == properties then
+							return i
+						end
+					end
+
+					error("failed to find suitable memory type!")
+				end
+
+				function Device:CreateBuffer(size, usage, properties)
+					local bufferInfo = vk.Box(vk.VkBufferCreateInfo, {
+						sType = "VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO",
+						size = size,
+						usage = usage,
+						sharingMode = "VK_SHARING_MODE_EXCLUSIVE",
+					})
+
+					local buffer_ptr = vk.Box(vk.VkBuffer)()
+					vk_assert(
+						lib.vkCreateBuffer(self.ptr[0], bufferInfo, nil, buffer_ptr),
+						"failed to create buffer"
+					)
+
+					local memRequirements = vk.Box(vk.VkMemoryRequirements)()
+					lib.vkGetBufferMemoryRequirements(self.ptr[0], buffer_ptr[0], memRequirements)
+
+					local allocInfo = vk.Box(vk.VkMemoryAllocateInfo, {
+						sType = "VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO",
+						allocationSize = memRequirements[0].size,
+						memoryTypeIndex = self:FindMemoryType(memRequirements[0].memoryTypeBits, properties),
+					})
+
+					local memory_ptr = vk.Box(vk.VkDeviceMemory)()
+					vk_assert(
+						lib.vkAllocateMemory(self.ptr[0], allocInfo, nil, memory_ptr),
+						"failed to allocate buffer memory"
+					)
+
+					lib.vkBindBufferMemory(self.ptr[0], buffer_ptr[0], memory_ptr[0], 0)
+
+					return setmetatable({
+						ptr = buffer_ptr,
+						memory = memory_ptr,
+						size = size,
+						device = self
+					}, Buffer)
+				end
+
+				function Buffer:Map()
+					local data = ffi.new("void*[1]")
+					lib.vkMapMemory(self.device.ptr[0], self.memory[0], 0, self.size, 0, data)
+					return data[0]
+				end
+
+				function Buffer:Unmap()
+					lib.vkUnmapMemory(self.device.ptr[0], self.memory[0])
+				end
+
+				function Buffer:CopyData(src_data, size)
+					local data = self:Map()
+					ffi.copy(data, src_data, size or self.size)
+					self:Unmap()
+				end
+
+				function Buffer:__gc()
+					lib.vkDestroyBuffer(self.device.ptr[0], self.ptr[0], nil)
+					lib.vkFreeMemory(self.device.ptr[0], self.memory[0], nil)
+				end
+			end
+
+			do -- descriptor set layout
+				local DescriptorSetLayout = {}
+				DescriptorSetLayout.__index = DescriptorSetLayout
+
+				function Device:CreateDescriptorSetLayout(bindings)
+					-- bindings is an array of tables: {{binding, type, stageFlags, count}, ...}
+					local bindingArray = vk.Array(vk.VkDescriptorSetLayoutBinding)(#bindings)
+					for i, b in ipairs(bindings) do
+						bindingArray[i-1].binding = b.binding or (i-1)
+						bindingArray[i-1].descriptorType = vk.VkDescriptorType(b.type or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER")
+						bindingArray[i-1].descriptorCount = b.count or 1
+						bindingArray[i-1].stageFlags = b.stageFlags or vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT")
+						bindingArray[i-1].pImmutableSamplers = nil
+					end
+
+					local layoutInfo = vk.Box(vk.VkDescriptorSetLayoutCreateInfo, {
+						sType = "VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO",
+						bindingCount = #bindings,
+						pBindings = bindingArray,
+					})
+
+					local ptr = vk.Box(vk.VkDescriptorSetLayout)()
+					vk_assert(
+						lib.vkCreateDescriptorSetLayout(self.ptr[0], layoutInfo, nil, ptr),
+						"failed to create descriptor set layout"
+					)
+
+					return setmetatable({ptr = ptr, device = self}, DescriptorSetLayout)
+				end
+
+				function DescriptorSetLayout:__gc()
+					lib.vkDestroyDescriptorSetLayout(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			do -- descriptor pool
+				local DescriptorPool = {}
+				DescriptorPool.__index = DescriptorPool
+
+				function Device:CreateDescriptorPool(poolSizes, maxSets)
+					-- poolSizes is an array of tables: {{type, count}, ...}
+					local poolSizeArray = vk.Array(vk.VkDescriptorPoolSize)(#poolSizes)
+					for i, ps in ipairs(poolSizes) do
+						poolSizeArray[i-1].type = vk.VkDescriptorType(ps.type or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER")
+						poolSizeArray[i-1].descriptorCount = ps.count or 1
+					end
+
+					local poolInfo = vk.Box(vk.VkDescriptorPoolCreateInfo, {
+						sType = "VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO",
+						poolSizeCount = #poolSizes,
+						pPoolSizes = poolSizeArray,
+						maxSets = maxSets or 1,
+					})
+
+					local ptr = vk.Box(vk.VkDescriptorPool)()
+					vk_assert(
+						lib.vkCreateDescriptorPool(self.ptr[0], poolInfo, nil, ptr),
+						"failed to create descriptor pool"
+					)
+
+					return setmetatable({ptr = ptr, device = self}, DescriptorPool)
+				end
+
+				function DescriptorPool:AllocateDescriptorSet(layout)
+					local allocInfo = vk.Box(vk.VkDescriptorSetAllocateInfo, {
+						sType = "VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO",
+						descriptorPool = self.ptr[0],
+						descriptorSetCount = 1,
+						pSetLayouts = layout.ptr,
+					})
+
+					local ptr = vk.Box(vk.VkDescriptorSet)()
+					vk_assert(
+						lib.vkAllocateDescriptorSets(self.device.ptr[0], allocInfo, ptr),
+						"failed to allocate descriptor set"
+					)
+
+					return {ptr = ptr, device = self.device}
+				end
+
+				function DescriptorPool:__gc()
+					lib.vkDestroyDescriptorPool(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			function Device:UpdateDescriptorSet(descriptorSet, binding, buffer, descriptorType)
+				local bufferInfo = vk.Box(vk.VkDescriptorBufferInfo, {
+					buffer = buffer.ptr[0],
+					offset = 0,
+					range = buffer.size,
+				})
+
+				local descriptorWrite = vk.Box(vk.VkWriteDescriptorSet, {
+					sType = "VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET",
+					dstSet = descriptorSet.ptr[0],
+					dstBinding = binding or 0,
+					dstArrayElement = 0,
+					descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+					descriptorCount = 1,
+					pBufferInfo = bufferInfo,
+				})
+
+				lib.vkUpdateDescriptorSets(self.ptr[0], 1, descriptorWrite, 0, nil)
 			end
 
 			do -- semaphore
@@ -883,13 +1109,25 @@ do -- instance
 				PipelineLayout.__index = PipelineLayout
 
 				-- used to pass data to shaders
-				function Device:CreatePipelineLayout()
+				function Device:CreatePipelineLayout(descriptorSetLayouts)
+					-- descriptorSetLayouts is an optional array of DescriptorSetLayout objects
+					local setLayoutArray = nil
+					local setLayoutCount = 0
+
+					if descriptorSetLayouts and #descriptorSetLayouts > 0 then
+						setLayoutCount = #descriptorSetLayouts
+						setLayoutArray = vk.Array(vk.VkDescriptorSetLayout)(setLayoutCount)
+						for i, layout in ipairs(descriptorSetLayouts) do
+							setLayoutArray[i-1] = layout.ptr[0]
+						end
+					end
+
 					local pipelineLayoutInfo = vk.Box(
 						vk.VkPipelineLayoutCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO",
-							setLayoutCount = 0,
-							pSetLayouts = nil,
+							setLayoutCount = setLayoutCount,
+							pSetLayouts = setLayoutArray,
 							pushConstantRangeCount = 0,
 							pPushConstantRanges = nil,
 						}
@@ -936,14 +1174,42 @@ do -- instance
 					local shaderStagesArray = ffi.new(stageArrayType)
 					shaderStagesArray[0] = vertShaderStageInfo[0]
 					shaderStagesArray[1] = fragShaderStageInfo[0]
+
+					-- Vertex input state
+					local bindingArray = nil
+					local attributeArray = nil
+					local bindingCount = 0
+					local attributeCount = 0
+
+					if config.vertexBindings then
+						bindingCount = #config.vertexBindings
+						bindingArray = vk.Array(vk.VkVertexInputBindingDescription)(bindingCount)
+						for i, binding in ipairs(config.vertexBindings) do
+							bindingArray[i-1].binding = binding.binding or (i-1)
+							bindingArray[i-1].stride = binding.stride
+							bindingArray[i-1].inputRate = vk.VkVertexInputRate(binding.inputRate or "VK_VERTEX_INPUT_RATE_VERTEX")
+						end
+					end
+
+					if config.vertexAttributes then
+						attributeCount = #config.vertexAttributes
+						attributeArray = vk.Array(vk.VkVertexInputAttributeDescription)(attributeCount)
+						for i, attr in ipairs(config.vertexAttributes) do
+							attributeArray[i-1].location = attr.location
+							attributeArray[i-1].binding = attr.binding or 0
+							attributeArray[i-1].format = vk.VkFormat(attr.format)
+							attributeArray[i-1].offset = attr.offset
+						end
+					end
+
 					local vertexInputInfo = vk.Box(
 						vk.VkPipelineVertexInputStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO",
-							vertexBindingDescriptionCount = 0,
-							pVertexBindingDescriptions = nil,
-							vertexAttributeDescriptionCount = 0,
-							pVertexAttributeDescriptions = nil,
+							vertexBindingDescriptionCount = bindingCount,
+							pVertexBindingDescriptions = bindingArray,
+							vertexAttributeDescriptionCount = attributeCount,
+							pVertexAttributeDescriptions = attributeArray,
 						}
 					)
 					local inputAssembly = vk.Box(
