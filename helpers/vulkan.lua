@@ -1,6 +1,7 @@
 local ffi = require("ffi")
 local vk = require("vk")
 local shaderc = require("shaderc")
+local setmetatable = require("helpers.setmetatable_gc")
 local lib = vk.find_library()
 local vulkan = {}
 vulkan.vk = vk
