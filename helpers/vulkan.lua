@@ -39,7 +39,6 @@ do -- instance
 	Instance.__index = Instance
 
 	function vulkan.CreateInstance(extensions, layers)
-
 		print("layers available:")
 		for k,v in ipairs(vulkan.GetAvailableLayers()) do
 			print("\t" .. v)

@@ -21,36 +21,39 @@ local mod = {}
 
 	do
 		local cache = {}
+
 		function mod.EnumToString(enum_type, index)
-			if not index then
-				index = tonumber(enum_type)
-			end
+			if not index then index = tonumber(enum_type) end
+
 			local enum_id = tonumber(ffi.typeof(enum_type))
 
 			if cache[enum_id] ~= nil then return cache[enum_id] end
-			
+
 			local enum_ctype = ffi.typeinfo(enum_id)
-			local current_index = 0
 			local sib = enum_ctype.sib
 
 			while sib do
 				local sib_ctype = ffi.typeinfo(sib)
 				local CT_code = bit.rshift(sib_ctype.info, 28)
+				local current_index = sib_ctype.size
+				
+				-- bug?
+				if current_index == nil then
+					current_index = -1
+				end
 
-				if CT_code == 11 then -- constant
-					if current_index == index then 
-						cache[enum_id] = sib_ctype.name 
-						return cache[enum_id] 
+				if CT_code == 11 then
+					if current_index == index then
+						cache[enum_id] = sib_ctype.name
+						return cache[enum_id]
 					end
 
-					current_index = current_index + 1
 				end
 
 				sib = sib_ctype.sib
 			end
 
 			cache[enum_id] = false
-
 			return nil
 		end
 	end
@@ -115,7 +118,9 @@ local mod = {}
 
 			-- Try MoltenVK directly first (more reliable on macOS)
 			if home then
-				table.insert(paths, home .. "/VulkanSDK/1.4.328.1/macOS/lib/libvulkan.1.dylib")
+				if vulkan_sdk then
+					table.insert(paths, home .. "/VulkanSDK/1.4.328.1/macOS/lib/libvulkan.1.dylib")
+				end
 				table.insert(paths, home .. "/VulkanSDK/1.4.328.1/macOS/lib/libMoltenVK.dylib")
 			end
 

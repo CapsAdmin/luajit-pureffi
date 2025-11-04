@@ -35,14 +35,16 @@ end
 
 function Renderer:Initialize(metal_surface)
 	local layers = {}
+	local extensions = {"VK_KHR_surface", "VK_EXT_metal_surface"}
 
 	if os.getenv("VULKAN_SDK") then
 		table.insert(layers, "VK_LAYER_KHRONOS_validation")
+		table.insert(extensions, "VK_KHR_portability_enumeration")
 	end
 
 	-- Vulkan initialization
 	self.instance = vulkan.CreateInstance(
-		{"VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"},
+		extensions,
 		layers
 	)
 	self.surface = self.instance:CreateMetalSurface(metal_surface)
