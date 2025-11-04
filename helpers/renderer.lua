@@ -260,17 +260,17 @@ function Renderer:RecreateSwapchain()
 
 	-- Clean up old framebuffers and image views
 	for _, framebuffer in ipairs(self.framebuffers) do
-		lib.vkDestroyFramebuffer(self.device.ptr[0], framebuffer.ptr[0], nil)
+		--lib.vkDestroyFramebuffer(self.device.ptr[0], framebuffer.ptr[0], nil)
 	end
 	self.framebuffers = {}
 
 	for _, imageView in ipairs(self.image_views) do
-		lib.vkDestroyImageView(self.device.ptr[0], imageView.ptr[0], nil)
+	--	lib.vkDestroyImageView(self.device.ptr[0], imageView.ptr[0], nil)
 	end
 	self.image_views = {}
 
 	-- Destroy old swapchain
-	lib.vkDestroySwapchainKHR(self.device.ptr[0], self.swapchain.ptr[0], nil)
+	--lib.vkDestroySwapchainKHR(self.device.ptr[0], self.swapchain.ptr[0], nil)
 
 	-- Re-query surface capabilities (they may have changed)
 	self.surface_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
@@ -290,7 +290,8 @@ function Renderer:RecreateSwapchain()
 		self.surface,
 		self.surface_formats[self.config.surface_format_index],
 		self.surface_capabilities,
-		swapchain_config
+		swapchain_config,
+		self.swapchain -- old swapchain for efficient recreation
 	)
 	self.swapchain_images = self.swapchain:GetImages()
 

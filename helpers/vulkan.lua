@@ -9,7 +9,9 @@ vulkan.lib = lib
 
 local function vk_assert(result, msg)
 	if result ~= 0 then
-		error((msg or "error") .. " : " .. vk.EnumToString(result), 2)
+		msg = msg or "Vulkan error"
+		local enum_str = vk.EnumToString(result) or ("error code - " .. tostring(result))
+		error(msg .. " : " .. enum_str, 2)
 	end
 end
 
@@ -296,7 +298,7 @@ do -- instance
 				--   clipped: boolean (default: true)
 				--   imageUsage: VkImageUsageFlags (default: COLOR_ATTACHMENT_BIT | TRANSFER_DST_BIT)
 				--   preTransform: VkSurfaceTransformFlagBitsKHR (default: currentTransform)
-				function Device:CreateSwapchain(surface, surfaceFormat, surfaceCapabilities, config)
+				function Device:CreateSwapchain(surface, surfaceFormat, surfaceCapabilities, config, old_swapchain)
 					config = config or {}
 					local imageCount = config.imageCount or surfaceCapabilities[0].minImageCount
 					local presentMode = config.presentMode or "VK_PRESENT_MODE_FIFO_KHR"
@@ -332,7 +334,7 @@ do -- instance
 							compositeAlpha = vk.VkCompositeAlphaFlagBitsKHR(compositeAlpha),
 							presentMode = presentMode,
 							clipped = clipped,
-							oldSwapchain = nil,
+							oldSwapchain = old_swapchain and old_swapchain.ptr[0],
 						}
 					)
 					local ptr = vk.Box(vk.VkSwapchainKHR)()
