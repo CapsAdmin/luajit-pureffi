@@ -40,10 +40,11 @@ do -- instance
 
 	function vulkan.CreateInstance(extensions, layers)
 		print("layers available:")
-		for k,v in ipairs(vulkan.GetAvailableLayers()) do
+
+		for k, v in ipairs(vulkan.GetAvailableLayers()) do
 			print("\t" .. v)
 		end
-		
+
 		local appInfo = vk.Box(
 			vk.VkApplicationInfo,
 			{
@@ -74,8 +75,7 @@ do -- instance
 		)
 		local ptr = vk.Box(vk.VkInstance)()
 		vk_assert(lib.vkCreateInstance(createInfo, nil, ptr), "failed to create vulkan instance")
-		local instance = setmetatable({ptr = ptr}, Instance)
-		return instance
+		return setmetatable({ptr = ptr}, Instance)
 	end
 
 	function Instance:__gc()
@@ -102,8 +102,7 @@ do -- instance
 				vkCreateMetalSurfaceEXT(self.ptr[0], surfaceCreateInfo, nil, ptr),
 				"failed to create metal surface"
 			)
-			local surface = setmetatable({ptr = ptr, instance = self}, Surface)
-			return surface
+			return setmetatable({ptr = ptr, instance = self}, Surface)
 		end
 
 		function Instance:__gc()
@@ -141,25 +140,21 @@ do -- instance
 		end
 
 		function PhysicalDevice:FindGraphicsQueueFamily(surface)
-			local queueFamilyCount = ffi.new("uint32_t[1]", 0)
-			lib.vkGetPhysicalDeviceQueueFamilyProperties(self.ptr, queueFamilyCount, nil)
-			local queueFamilies = vk.Array(vk.VkQueueFamilyProperties)(queueFamilyCount[0])
-			lib.vkGetPhysicalDeviceQueueFamilyProperties(self.ptr, queueFamilyCount, queueFamilies)
 			local graphicsQueueFamily = nil
 
-			for i = 0, queueFamilyCount[0] - 1 do
-				local queueFlags = queueFamilies[i].queueFlags
+			for i, queueFamily in ipairs(self:GetQueueFamilyProperties()) do
+				local queueFlags = queueFamily.queueFlags
 				local graphicsBit = vk.VkQueueFlagBits("VK_QUEUE_GRAPHICS_BIT")
 
 				if bit.band(queueFlags, graphicsBit) ~= 0 then
-					if not graphicsQueueFamily then graphicsQueueFamily = i end
+					if not graphicsQueueFamily then graphicsQueueFamily = i-1 end
 				end
 
 				local presentSupport = ffi.new("uint32_t[1]", 0)
-				lib.vkGetPhysicalDeviceSurfaceSupportKHR(self.ptr, i, surface.ptr[0], presentSupport)
+				lib.vkGetPhysicalDeviceSurfaceSupportKHR(self.ptr, i-1, surface.ptr[0], presentSupport)
 
 				if bit.band(queueFlags, graphicsBit) ~= 0 and presentSupport[0] ~= 0 then
-					graphicsQueueFamily = i
+					graphicsQueueFamily = i-1
 
 					break
 				end
@@ -181,6 +176,21 @@ do -- instance
 
 			for i = 0, count - 1 do
 				result[i + 1] = formats[i]
+			end
+
+			return result
+		end
+
+		function PhysicalDevice:GetQueueFamilyProperties()
+			local count = ffi.new("uint32_t[1]", 0)
+			lib.vkGetPhysicalDeviceQueueFamilyProperties(self.ptr, count, nil)
+			local queue_family_count = count[0]
+			local queue_families = vk.Array(vk.VkQueueFamilyProperties)(queue_family_count)
+			lib.vkGetPhysicalDeviceQueueFamilyProperties(self.ptr, count, queue_families)
+			local result = {}
+
+			for i = 0, queue_family_count - 1 do
+				result[i + 1] = queue_families[i]
 			end
 
 			return result
@@ -221,39 +231,48 @@ do -- instance
 				lib.vkEnumerateDeviceExtensionProperties(self.ptr, nil, extensionCount, nil)
 				local availableExtensions = vk.Array(vk.VkExtensionProperties)(extensionCount[0])
 				lib.vkEnumerateDeviceExtensionProperties(self.ptr, nil, extensionCount, availableExtensions)
-
 				local hasPortabilitySubset = false
+
 				for i = 0, extensionCount[0] - 1 do
 					local extName = ffi.string(availableExtensions[i].extensionName)
+
 					if extName == "VK_KHR_portability_subset" then
 						hasPortabilitySubset = true
+
 						break
 					end
 				end
 
 				-- Add portability subset and its dependency if supported
 				local finalExtensions = {}
+
 				for i, ext in ipairs(extensions) do
 					finalExtensions[i] = ext
 				end
+
 				if hasPortabilitySubset then
 					-- VK_KHR_portability_subset requires VK_KHR_get_physical_device_properties2
 					-- but this extension is promoted to core in Vulkan 1.1, so it's likely already available
 					table.insert(finalExtensions, "VK_KHR_portability_subset")
 					-- Only add the dependency if not already present
 					local hasGetProps2 = false
+
 					for _, ext in ipairs(finalExtensions) do
 						if ext == "VK_KHR_get_physical_device_properties2" then
 							hasGetProps2 = true
+
 							break
 						end
 					end
+
 					if not hasGetProps2 then
 						-- Check if this extension is available
 						for i = 0, extensionCount[0] - 1 do
 							local extName = ffi.string(availableExtensions[i].extensionName)
+
 							if extName == "VK_KHR_get_physical_device_properties2" then
 								table.insert(finalExtensions, "VK_KHR_get_physical_device_properties2")
+
 								break
 							end
 						end
@@ -286,8 +305,7 @@ do -- instance
 					lib.vkCreateDevice(self.ptr, deviceCreateInfo, nil, ptr),
 					"failed to create device"
 				)
-				local device = setmetatable({ptr = ptr}, Device)
-				return device
+				return setmetatable({ptr = ptr}, Device)
 			end
 
 			function Device:__gc()
@@ -313,8 +331,7 @@ do -- instance
 						lib.vkCreateShaderModule(self.ptr[0], shaderModuleCreateInfo, nil, ptr),
 						"failed to create shader module"
 					)
-					local shaderModule = setmetatable({ptr = ptr, device = self}, ShaderModule)
-					return shaderModule
+					return setmetatable({ptr = ptr, device = self}, ShaderModule)
 				end
 
 				function ShaderModule:__gc()
@@ -422,8 +439,7 @@ do -- instance
 						lib.vkCreateSwapchainKHR(self.ptr[0], swapchainCreateInfo, nil, ptr),
 						"failed to create swapchain"
 					)
-					local swapchain = setmetatable({ptr = ptr, device = self}, Swapchain)
-					return swapchain
+					return setmetatable({ptr = ptr, device = self}, Swapchain)
 				end
 
 				function Swapchain:__gc()
@@ -440,7 +456,6 @@ do -- instance
 
 				function Swapchain:GetNextImage(imageAvailableSemaphore)
 					local imageIndex = ffi.new("uint32_t[1]", 0)
-					
 					local result = lib.vkAcquireNextImageKHR(
 						self.device.ptr[0],
 						self.ptr[0],
@@ -507,8 +522,7 @@ do -- instance
 						lib.vkCreateCommandPool(self.ptr[0], commandPoolCreateInfo, nil, ptr),
 						"failed to create command pool"
 					)
-					local commandPool = setmetatable({ptr = ptr, device = self}, CommandPool)
-					return commandPool
+					return setmetatable({ptr = ptr, device = self}, CommandPool)
 				end
 
 				function CommandPool:__gc()
@@ -691,8 +705,7 @@ do -- instance
 						lib.vkCreateSemaphore(self.ptr[0], semaphoreCreateInfo, nil, ptr),
 						"failed to create semaphore"
 					)
-					local semaphore = setmetatable({ptr = ptr, device = self}, Semaphore)
-					return semaphore
+					return setmetatable({ptr = ptr, device = self}, Semaphore)
 				end
 
 				function Semaphore:__gc()
@@ -714,8 +727,7 @@ do -- instance
 					)
 					local ptr = vk.Box(vk.VkFence)()
 					vk_assert(lib.vkCreateFence(self.ptr[0], fenceCreateInfo, nil, ptr), "failed to create fence")
-					local fence = setmetatable({ptr = ptr, device = self}, Fence)
-					return fence
+					return setmetatable({ptr = ptr, device = self}, Fence)
 				end
 
 				function Fence:__gc()
@@ -764,7 +776,7 @@ do -- instance
 					local dependency = vk.Box(
 						vk.VkSubpassDependency,
 						{
-							srcSubpass = 0xFFFFFFFF, -- VK_SUBPASS_EXTERNAL
+							srcSubpass = vk.VK_SUBPASS_EXTERNAL,
 							dstSubpass = 0,
 							srcStageMask = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT"),
 							srcAccessMask = 0,
@@ -789,8 +801,7 @@ do -- instance
 						lib.vkCreateRenderPass(self.ptr[0], renderPassInfo, nil, ptr),
 						"failed to create render pass"
 					)
-					local renderPass = setmetatable({ptr = ptr, device = self}, RenderPass)
-					return renderPass
+					return setmetatable({ptr = ptr, device = self}, RenderPass)
 				end
 
 				function RenderPass:__gc()
@@ -821,8 +832,7 @@ do -- instance
 						lib.vkCreateFramebuffer(self.ptr[0], framebufferInfo, nil, ptr),
 						"failed to create framebuffer"
 					)
-					local framebuffer = setmetatable({ptr = ptr, device = self}, Framebuffer)
-					return framebuffer
+					return setmetatable({ptr = ptr, device = self}, Framebuffer)
 				end
 
 				function Framebuffer:__gc()
@@ -856,8 +866,7 @@ do -- instance
 						lib.vkCreateImageView(self.ptr[0], viewInfo, nil, ptr),
 						"failed to create image view"
 					)
-					local imageView = setmetatable({ptr = ptr, device = self}, ImageView)
-					return imageView
+					return setmetatable({ptr = ptr, device = self}, ImageView)
 				end
 
 				function ImageView:__gc()
@@ -869,6 +878,7 @@ do -- instance
 				local PipelineLayout = {}
 				PipelineLayout.__index = PipelineLayout
 
+				-- used to pass data to shaders
 				function Device:CreatePipelineLayout()
 					local pipelineLayoutInfo = vk.Box(
 						vk.VkPipelineLayoutCreateInfo,
@@ -885,8 +895,7 @@ do -- instance
 						lib.vkCreatePipelineLayout(self.ptr[0], pipelineLayoutInfo, nil, ptr),
 						"failed to create pipeline layout"
 					)
-					local pipelineLayout = setmetatable({ptr = ptr, device = self}, PipelineLayout)
-					return pipelineLayout
+					return setmetatable({ptr = ptr, device = self}, PipelineLayout)
 				end
 
 				function PipelineLayout:__gc()
@@ -1039,8 +1048,7 @@ do -- instance
 						lib.vkCreateGraphicsPipelines(self.ptr[0], nil, 1, pipelineInfo, nil, ptr),
 						"failed to create graphics pipeline"
 					)
-					local pipeline = setmetatable({ptr = ptr, device = self, config = config}, Pipeline)
-					return pipeline
+					return setmetatable({ptr = ptr, device = self, config = config}, Pipeline)
 				end
 
 				function Pipeline:__gc()

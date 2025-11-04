@@ -16,7 +16,6 @@ local renderer = Renderer.New(
 		composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR",
 	}
 )
-renderer:PrintCapabilities()
 local renderPass = renderer:CreateRenderPass()
 renderer:CreateImageViews()
 renderer:CreateFramebuffers()
