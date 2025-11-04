@@ -16,63 +16,61 @@ local renderer = Renderer.New(
 		composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR",
 	}
 )
-local renderPass = renderer:CreateRenderPass()
-renderer:CreateImageViews()
-renderer:CreateFramebuffers()
-local pipelineLayout = renderer.device:CreatePipelineLayout()
-local vertShaderSource = [[
-    #version 450
+local pipeline
 
-    vec2 positions[3] = vec2[](
-        vec2(0.0, -0.5),
-        vec2(0.5, 0.5),
-        vec2(-0.5, 0.5)
-    );
+do
+	local renderPass = renderer:CreateRenderPass()
+	renderer:CreateImageViews()
+	renderer:CreateFramebuffers()
+	local pipelineLayout = renderer.device:CreatePipelineLayout()
+	local vertShaderSource = [[
+		#version 450
 
-    vec3 colors[3] = vec3[](
-        vec3(1.0, 0.0, 0.0),
-        vec3(0.0, 1.0, 0.0),
-        vec3(0.0, 0.0, 1.0)
-    );
+		vec2 positions[3] = vec2[](
+			vec2(0.0, -0.5),
+			vec2(0.5, 0.5),
+			vec2(-0.5, 0.5)
+		);
 
-    layout(location = 0) out vec3 fragColor;
+		vec3 colors[3] = vec3[](
+			vec3(1.0, 0.0, 0.0),
+			vec3(0.0, 1.0, 0.0),
+			vec3(0.0, 0.0, 1.0)
+		);
 
-    void main() {
-        gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-        fragColor = colors[gl_VertexIndex];
-    }
-]]
-local fragShaderSource = [[
-    #version 450
+		layout(location = 0) out vec3 fragColor;
 
-    layout(location = 0) in vec3 fragColor;
-    layout(location = 0) out vec4 outColor;
-
-    void main() {
-        outColor = vec4(fragColor, 1.0);
-    }
-]]
-
-local function createPipeline()
-	local extent = renderer:GetExtent()
-	return renderer.device:CreateGraphicsPipeline(
-		{
-			vertShaderModule = renderer.device:CreateShaderModule(vertShaderSource, "vertex"),
-			fragShaderModule = renderer.device:CreateShaderModule(fragShaderSource, "fragment"),
-			pipelineLayout = pipelineLayout,
-			renderPass = renderPass,
-			extent = extent,
+		void main() {
+			gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+			fragColor = colors[gl_VertexIndex];
 		}
-	)
+	]]
+	local fragShaderSource = [[
+		#version 450
+
+		layout(location = 0) in vec3 fragColor;
+		layout(location = 0) out vec4 outColor;
+
+		void main() {
+			outColor = vec4(fragColor, 1.0);
+		}
+	]]
+
+	function renderer:OnRecreateSwapchain()
+		local extent = renderer:GetExtent()
+		pipeline = renderer.device:CreateGraphicsPipeline(
+			{
+				vertShaderModule = renderer.device:CreateShaderModule(vertShaderSource, "vertex"),
+				fragShaderModule = renderer.device:CreateShaderModule(fragShaderSource, "fragment"),
+				pipelineLayout = pipelineLayout,
+				renderPass = renderPass,
+				extent = extent,
+			}
+		)
+	end
 end
 
-local pipeline = createPipeline()
-
-function renderer:OnRecreateSwapchain()
-	pipeline = createPipeline()
-end
-
-print("Graphics pipeline created successfully")
+renderer:OnRecreateSwapchain()
 wnd:Initialize()
 wnd:OpenWindow()
 
@@ -80,7 +78,7 @@ while true do
 	local events = wnd:ReadEvents()
 
 	if events.window_close_requested then
-		print("Window close requested")
+		print("close")
 
 		break
 	end

@@ -61,108 +61,6 @@ function Renderer:Initialize(metal_surface)
 	return self
 end
 
-function Renderer:CreateRenderPass()
-	if self.render_pass then return self.render_pass end
-
-	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index])
-	return self.render_pass
-end
-
-function Renderer:CreateImageViews()
-	self.image_views = {}
-
-	for i = 0, self.swapchain_image_count - 1 do
-		local imageView = self.device:CreateImageView(self.swapchain_images[i], self.surface_formats[self.config.surface_format_index].format)
-		table.insert(self.image_views, imageView)
-	end
-end
-
-function Renderer:CreateFramebuffers()
-	if not self.render_pass then
-		error("Render pass must be created before framebuffers")
-	end
-
-	if #self.image_views == 0 then
-		error("Image views must be created before framebuffers")
-	end
-
-	local extent = self.surface_capabilities[0].currentExtent
-	self.framebuffers = {}
-
-	for _, imageView in ipairs(self.image_views) do
-		table.insert(
-			self.framebuffers,
-			self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height)
-		)
-	end
-end
-
-function Renderer:GetExtent()
-	return self.surface_capabilities[0].currentExtent
-end
-
-function Renderer:BeginFrame()
-	-- Use round-robin frame index
-	self.current_frame = (self.current_frame % self.swapchain_image_count) + 1
-	-- Wait for the fence for this frame FIRST (ensures previous use of this frame's resources is complete)
-	self.in_flight_fences[self.current_frame]:Wait()
-	-- Acquire next image (after waiting on fence)
-	self.image_index, self.acquire_status = self.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
-
-	-- Check if swapchain needs recreation
-	if self.acquire_status == "out_of_date" or self.image_index == nil then
-		self:RecreateSwapchain()
-		return nil
-	end
-
-	-- Reset and begin command buffer for this frame
-	self.command_buffers[self.current_frame]:Reset()
-	self.command_buffers[self.current_frame]:Begin()
-	return true
-end
-
-function Renderer:BeginPipelineBarrier()
-	self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
-	self.command_buffer:StartPipelineBarrier(self.barrier)
-end
-
-function Renderer:EndPipelineBarrier()
-	self.command_buffer:EndPipelineBarrier(self.barrier)
-end
-
-function Renderer:GetCommandBuffer()
-	return self.command_buffers[self.current_frame]
-end
-
-function Renderer:GetSwapChainImage()
-	return self.swapchain_images[self.image_index[0]]
-end
-
-function Renderer:GetFramebuffer()
-	return self.framebuffers[self.image_index[0] + 1]
-end
-
-function Renderer:EndFrame()
-	local command_buffer = self.command_buffers[self.current_frame]
-	command_buffer:End()
-	-- Submit command buffer with current frame's semaphores
-	self.queue:Submit(
-		command_buffer,
-		self.image_available_semaphores[self.current_frame],
-		self.render_finished_semaphores[self.current_frame],
-		self.in_flight_fences[self.current_frame]
-	)
-	-- Present
-	local present_status = self.swapchain:Present(self.render_finished_semaphores[self.current_frame], self.queue, self.image_index)
-
-	-- Recreate swapchain if needed
-	if present_status == "out_of_date" or present_status == "suboptimal" then
-		self:RecreateSwapchain()
-	end
-
-	return present_status
-end
-
 function Renderer:RecreateSwapchain()
 	-- Wait for device to be idle (skip on initial creation)
 	if self.swapchain then self:WaitForIdle() end
@@ -204,21 +102,18 @@ function Renderer:RecreateSwapchain()
 		swapchain_config,
 		self.swapchain -- old swapchain for efficient recreation (nil on initial creation)
 	)
-	self.swapchain_images = self.swapchain:GetImages()
-	-- Update image count
-	local imageCount = ffi.new("uint32_t[1]", 0)
-	lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.swapchain.ptr[0], imageCount, nil)
-	local old_count = self.swapchain_image_count
-	self.swapchain_image_count = imageCount[0]
 
-	-- Recreate synchronization objects and command buffers if count changed or initial creation
-	if not old_count or old_count ~= self.swapchain_image_count then
+
+	local old_count = self.swapchain_images and #self.swapchain_images or 0
+	self.swapchain_images = self.swapchain:GetImages()
+
+	if old_count ~= #self.swapchain_images then
 		self.command_buffers = {}
 		self.image_available_semaphores = {}
 		self.render_finished_semaphores = {}
 		self.in_flight_fences = {}
 
-		for i = 1, self.swapchain_image_count do
+		for i = 1, #self.swapchain_images do
 			self.command_buffers[i] = self.command_pool:CreateCommandBuffer()
 			self.image_available_semaphores[i] = self.device:CreateSemaphore()
 			self.render_finished_semaphores[i] = self.device:CreateSemaphore()
@@ -234,10 +129,109 @@ function Renderer:RecreateSwapchain()
 		self:CreateFramebuffers()
 	end
 
-	self:OnRecreateSwapchain()
+	if self.OnRecreateSwapchain then
+		self:OnRecreateSwapchain()
+	end
 end
 
-function Renderer:OnRecreateSwapchain() -- Override in derived classes if needed
+function Renderer:CreateRenderPass()
+	if self.render_pass then return self.render_pass end
+
+	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index])
+	return self.render_pass
+end
+
+function Renderer:CreateImageViews()
+	self.image_views = {}
+
+	for _, swapchain_image in ipairs(self.swapchain_images) do
+		table.insert(self.image_views, self.device:CreateImageView(swapchain_image, self.surface_formats[self.config.surface_format_index].format))
+	end
+end
+
+function Renderer:CreateFramebuffers()
+	if not self.render_pass then
+		error("Render pass must be created before framebuffers")
+	end
+
+	if #self.image_views == 0 then
+		error("Image views must be created before framebuffers")
+	end
+
+	local extent = self.surface_capabilities[0].currentExtent
+	self.framebuffers = {}
+
+	for _, imageView in ipairs(self.image_views) do
+		table.insert(
+			self.framebuffers,
+			self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height)
+		)
+	end
+end
+
+function Renderer:GetExtent()
+	return self.surface_capabilities[0].currentExtent
+end
+
+function Renderer:BeginFrame()
+	-- Use round-robin frame index
+	self.current_frame = (self.current_frame % #self.swapchain_images) + 1
+	-- Wait for the fence for this frame FIRST (ensures previous use of this frame's resources is complete)
+	self.in_flight_fences[self.current_frame]:Wait()
+	-- Acquire next image (after waiting on fence)
+	local image_index = self.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
+
+	-- Check if swapchain needs recreation
+	if image_index == nil then
+		self:RecreateSwapchain()
+		return nil
+	end
+
+	self.image_index = image_index + 1
+
+	-- Reset and begin command buffer for this frame
+	self.command_buffers[self.current_frame]:Reset()
+	self.command_buffers[self.current_frame]:Begin()
+	return true
+end
+
+function Renderer:BeginPipelineBarrier()
+	self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
+	self.command_buffer:StartPipelineBarrier(self.barrier)
+end
+
+function Renderer:EndPipelineBarrier()
+	self.command_buffer:EndPipelineBarrier(self.barrier)
+end
+
+function Renderer:GetCommandBuffer()
+	return self.command_buffers[self.current_frame]
+end
+
+function Renderer:GetSwapChainImage()
+	return self.swapchain_images[self.image_index]
+end
+
+function Renderer:GetFramebuffer()
+	return self.framebuffers[self.image_index]
+end
+
+function Renderer:EndFrame()
+	local command_buffer = self.command_buffers[self.current_frame]
+	command_buffer:End()
+	-- Submit command buffer with current frame's semaphores
+	self.queue:Submit(
+		command_buffer,
+		self.image_available_semaphores[self.current_frame],
+		self.render_finished_semaphores[self.current_frame],
+		self.in_flight_fences[self.current_frame]
+	)
+	-- Recreate swapchain if needed
+	if not self.swapchain:Present(self.render_finished_semaphores[self.current_frame], self.queue, ffi.new("uint32_t[1]", self.image_index - 1)) then
+		self:RecreateSwapchain()
+	end
+
+	return present_status
 end
 
 function Renderer:NeedsRecreation()
