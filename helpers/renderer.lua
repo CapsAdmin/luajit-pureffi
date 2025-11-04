@@ -207,6 +207,16 @@ function Renderer:PrintCapabilities()
 end
 
 function Renderer:BeginFrame()
+	-- Re-query surface capabilities to check current state
+	self.surface_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
+
+	-- Check if surface is valid before attempting to render
+	local extent = self.surface_capabilities[0].currentExtent
+	if extent.width == 0 or extent.height == 0 then
+		-- Surface is minimized or invalid, skip this frame
+		return nil
+	end
+
 	-- Use round-robin frame index
 	self.current_frame = (self.current_frame % self.swapchain_image_count) + 1
 
@@ -276,6 +286,34 @@ function Renderer:RecreateSwapchain()
 	lib.vkDeviceWaitIdle(self.device.ptr[0])
 	-- Re-query surface capabilities (they may have changed)
 	self.surface_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
+
+	-- Check if surface extent is valid (can be 0x0 during window minimize/resize)
+	local extent = self.surface_capabilities[0].currentExtent
+	if extent.width == 0 or extent.height == 0 then
+		-- Skip swapchain recreation when surface is invalid
+		return
+	end
+
+	-- Re-query surface formats to ensure they're valid
+	local new_surface_formats = self.physical_device:GetSurfaceFormats(self.surface)
+
+	-- Validate that we have formats and the selected index is still valid
+	if #new_surface_formats == 0 then
+		error("No surface formats available")
+	end
+
+	if self.config.surface_format_index > #new_surface_formats then
+		error("Surface format index out of bounds after resize")
+	end
+
+	-- Check if the selected format is valid (not VK_FORMAT_UNDEFINED)
+	local selected_format = new_surface_formats[self.config.surface_format_index]
+	if selected_format.format == vk.VkFormat("VK_FORMAT_UNDEFINED") then
+		error("Selected surface format is VK_FORMAT_UNDEFINED")
+	end
+
+	self.surface_formats = new_surface_formats
+
 	-- Build swapchain config
 	local swapchain_config = {
 		present_mode = self.config.present_mode,
