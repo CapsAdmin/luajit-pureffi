@@ -18,7 +18,6 @@ local renderer = Renderer.New(
 )
 local pipeline
 local vertexBuffer
-local uniformBuffer
 local descriptorSetLayout
 local descriptorPool
 local descriptorSet
@@ -37,8 +36,8 @@ do
 			0.0, -- g
 			0.0, -- b
 			-- top (blue)
-			0.5, 
-			0.5, 
+			0.5,
+			0.5,
 			0.0,
 			1.0,
 			0.0,
@@ -47,7 +46,7 @@ do
 			0.5,
 			0.0,
 			0.0,
-			1.0, 
+			1.0,
 		}
 	)
 	local bufferSize = ffi.sizeof(vertices)
@@ -64,9 +63,11 @@ do
 end
 
 -- Create uniform buffer for color multiplier
+local uniformBuffers = {}
+
 do
 	local bufferSize = ffi.sizeof("float") * 4 -- vec4
-	uniformBuffer = renderer.device:CreateBuffer(
+	uniformBuffers[1] = renderer.device:CreateBuffer(
 		bufferSize,
 		vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT"),
 		bit.bor(
@@ -76,7 +77,22 @@ do
 	)
 	-- Initialize uniform buffer with white color multiplier
 	local colorData = ffi.new("float[4]", {1.0, 1.0, 1.0, 1.0})
-	uniformBuffer:CopyData(colorData, bufferSize)
+	uniformBuffers[1]:CopyData(colorData, bufferSize)
+end
+
+do
+	local bufferSize = ffi.sizeof("float") * 4 -- vec4
+	uniformBuffers[2] = renderer.device:CreateBuffer(
+		bufferSize,
+		vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT"),
+		bit.bor(
+			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT"),
+			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT")
+		)
+	)
+	-- Initialize uniform buffer with white color multiplier
+	local colorData = ffi.new("float[4]", {23.0, 1.0, 1.0, 1.0})
+	uniformBuffers[2]:CopyData(colorData, bufferSize)
 end
 
 do
@@ -92,17 +108,25 @@ do
 				stageFlags = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT"),
 				count = 1,
 			},
+			{
+				binding = 1,
+				type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+				stageFlags = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT"),
+				count = 1,
+			},
 		}
 	)
 	-- Create pipeline layout with descriptor set layout
 	pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
 	-- Create descriptor pool
-	descriptorPool = renderer.device:CreateDescriptorPool({{type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", count = 1}}, 1)
+	descriptorPool = renderer.device:CreateDescriptorPool({{type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", count = #uniformBuffers}}, 1)
 	-- Allocate descriptor set
 	descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
 	-- Update descriptor set to point to uniform buffer
-	renderer.device:UpdateDescriptorSet(descriptorSet, 0, uniformBuffer)
-	local vertShaderSource = [[
+	renderer.device:UpdateDescriptorSet(descriptorSet, 0, uniformBuffers[1])
+	renderer.device:UpdateDescriptorSet(descriptorSet, 1, uniformBuffers[2])
+	local vertShaderSource = renderer.device:CreateShaderModule(
+		[[
 		#version 450
 
 		layout(location = 0) in vec2 inPosition;
@@ -114,31 +138,39 @@ do
 			gl_Position = vec4(inPosition, 0.0, 1.0);
 			fragColor = inColor;
 		}
-	]]
-	local fragShaderSource = [[
+	]],
+		"vertex"
+	)
+	local fragShaderSource = renderer.device:CreateShaderModule(
+		[[
 		#version 450
 
 		layout(binding = 0) uniform ColorUniform {
 			vec4 colorMultiplier;
 		} ubo;
 
+		layout(binding = 1) uniform ColorUniform2 {
+			vec4 colorMultiplier;
+		} ubo2;
+
 		layout(location = 0) in vec3 fragColor;
 		layout(location = 0) out vec4 outColor;
 
 		void main() {
-			outColor = vec4(fragColor, 1.0) * ubo.colorMultiplier;
+			outColor = vec4(fragColor, 1.0) * ubo.colorMultiplier * ubo2.colorMultiplier;
 		}
-	]]
+	]],
+		"fragment"
+	)
 
 	function renderer:OnRecreateSwapchain()
-		local extent = renderer:GetExtent()
 		pipeline = renderer.device:CreateGraphicsPipeline(
 			{
-				vertShaderModule = renderer.device:CreateShaderModule(vertShaderSource, "vertex"),
-				fragShaderModule = renderer.device:CreateShaderModule(fragShaderSource, "fragment"),
+				vertShaderModule = vertShaderSource,
+				fragShaderModule = fragShaderSource,
 				pipelineLayout = pipelineLayout,
 				renderPass = renderPass,
-				extent = extent,
+				extent = renderer:GetExtent(),
 				vertexBindings = {
 					{
 						binding = 0,
@@ -163,9 +195,10 @@ do
 			}
 		)
 	end
+
+	renderer:OnRecreateSwapchain()
 end
 
-renderer:OnRecreateSwapchain()
 wnd:Initialize()
 wnd:OpenWindow()
 
@@ -181,9 +214,7 @@ while true do
 	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
-		local extent = renderer:GetExtent()
-		local cmd = renderer:GetCommandBuffer()
-		cmd:BeginRenderPass(renderer.render_pass, renderer:GetFramebuffer(), extent, {0.0, 0.0, 0.0, 1.0})
+		local cmd = renderer:BeginRenderPass({0.0, 0.0, 0.0, 1.0})
 		cmd:BindPipeline(pipeline)
 		cmd:BindVertexBuffers(0, {vertexBuffer})
 		cmd:BindDescriptorSets(pipelineLayout, {descriptorSet}, 0)

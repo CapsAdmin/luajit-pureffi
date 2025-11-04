@@ -102,8 +102,6 @@ function Renderer:RecreateSwapchain()
 		swapchain_config,
 		self.swapchain -- old swapchain for efficient recreation (nil on initial creation)
 	)
-
-
 	local old_count = self.swapchain_images and #self.swapchain_images or 0
 	self.swapchain_images = self.swapchain:GetImages()
 
@@ -129,9 +127,7 @@ function Renderer:RecreateSwapchain()
 		self:CreateFramebuffers()
 	end
 
-	if self.OnRecreateSwapchain then
-		self:OnRecreateSwapchain()
-	end
+	if self.OnRecreateSwapchain then self:OnRecreateSwapchain() end
 end
 
 function Renderer:CreateRenderPass()
@@ -141,11 +137,20 @@ function Renderer:CreateRenderPass()
 	return self.render_pass
 end
 
+function Renderer:BeginRenderPass(clear_color)
+	local command_buffer = self:GetCommandBuffer()
+	command_buffer:BeginRenderPass(self.render_pass, self:GetFramebuffer(), self:GetExtent(), clear_color)
+	return command_buffer
+end
+
 function Renderer:CreateImageViews()
 	self.image_views = {}
 
 	for _, swapchain_image in ipairs(self.swapchain_images) do
-		table.insert(self.image_views, self.device:CreateImageView(swapchain_image, self.surface_formats[self.config.surface_format_index].format))
+		table.insert(
+			self.image_views,
+			self.device:CreateImageView(swapchain_image, self.surface_formats[self.config.surface_format_index].format)
+		)
 	end
 end
 
@@ -188,7 +193,6 @@ function Renderer:BeginFrame()
 	end
 
 	self.image_index = image_index + 1
-
 	-- Reset and begin command buffer for this frame
 	self.command_buffers[self.current_frame]:Reset()
 	self.command_buffers[self.current_frame]:Begin()
@@ -226,8 +230,11 @@ function Renderer:EndFrame()
 		self.render_finished_semaphores[self.current_frame],
 		self.in_flight_fences[self.current_frame]
 	)
+
 	-- Recreate swapchain if needed
-	if not self.swapchain:Present(self.render_finished_semaphores[self.current_frame], self.queue, ffi.new("uint32_t[1]", self.image_index - 1)) then
+	if
+		not self.swapchain:Present(self.render_finished_semaphores[self.current_frame], self.queue, ffi.new("uint32_t[1]", self.image_index - 1))
+	then
 		self:RecreateSwapchain()
 	end
 
