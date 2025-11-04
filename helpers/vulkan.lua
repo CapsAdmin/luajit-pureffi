@@ -1,5 +1,6 @@
 local ffi = require("ffi")
 local vk = require("vk")
+local shaderc = require("shaderc")
 local lib = vk.find_library()
 local vulkan = {}
 vulkan.vk = vk
@@ -219,7 +220,8 @@ do -- instance
 				local ShaderModule = {}
 				ShaderModule.__index = ShaderModule
 
-				function Device:CreateShaderModule(spirv_data, spirv_size)
+				function Device:CreateShaderModule(glsl, type)
+					local spirv_data, spirv_size = shaderc.compile(glsl, type)
 					local shaderModuleCreateInfo = vk.Box(
 						vk.VkShaderModuleCreateInfo,
 						{
@@ -512,6 +514,61 @@ do -- instance
 					function CommandBuffer:End()
 						vk_assert(lib.vkEndCommandBuffer(self.ptr[0]), "failed to end command buffer")
 					end
+
+					function CommandBuffer:BeginRenderPass(renderPass, framebuffer, extent, clearColor)
+						clearColor = clearColor or {0.0, 0.0, 0.0, 1.0}
+						local clearValue = vk.Box(
+							vk.VkClearValue,
+							{
+								color = {
+									float32 = clearColor,
+								},
+							}
+						)
+
+						local renderPassInfo = vk.Box(
+							vk.VkRenderPassBeginInfo,
+							{
+								sType = "VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO",
+								renderPass = renderPass.ptr[0],
+								framebuffer = framebuffer.ptr[0],
+								renderArea = {
+									offset = {x = 0, y = 0},
+									extent = extent,
+								},
+								clearValueCount = 1,
+								pClearValues = clearValue,
+							}
+						)
+
+						lib.vkCmdBeginRenderPass(
+							self.ptr[0],
+							renderPassInfo,
+							vk.VkSubpassContents("VK_SUBPASS_CONTENTS_INLINE")
+						)
+					end
+
+					function CommandBuffer:EndRenderPass()
+						lib.vkCmdEndRenderPass(self.ptr[0])
+					end
+
+					function CommandBuffer:BindPipeline(pipeline)
+						lib.vkCmdBindPipeline(
+							self.ptr[0],
+							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_GRAPHICS"),
+							pipeline.ptr[0]
+						)
+					end
+
+					function CommandBuffer:Draw(vertexCount, instanceCount, firstVertex, firstInstance)
+						lib.vkCmdDraw(
+							self.ptr[0],
+							vertexCount or 3,
+							instanceCount or 1,
+							firstVertex or 0,
+							firstInstance or 0
+						)
+					end
 				end
 			end
 
@@ -565,6 +622,348 @@ do -- instance
 				function Fence:Wait()
 					lib.vkWaitForFences(self.device.ptr[0], 1, self.ptr, 1, ffi.cast("uint64_t", -1))
 					lib.vkResetFences(self.device.ptr[0], 1, self.ptr)
+				end
+			end
+
+			do -- render pass
+				local RenderPass = {}
+				RenderPass.__index = RenderPass
+
+				function Device:CreateRenderPass(surfaceFormat)
+					local colorAttachment = vk.Box(
+						vk.VkAttachmentDescription,
+						{
+							format = surfaceFormat.format,
+							samples = "VK_SAMPLE_COUNT_1_BIT",
+							loadOp = "VK_ATTACHMENT_LOAD_OP_CLEAR",
+							storeOp = "VK_ATTACHMENT_STORE_OP_STORE",
+							stencilLoadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE",
+							stencilStoreOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE",
+							initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
+							finalLayout = "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
+						}
+					)
+
+					local colorAttachmentRef = vk.Box(
+						vk.VkAttachmentReference,
+						{
+							attachment = 0,
+							layout = "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
+						}
+					)
+
+					local subpass = vk.Box(
+						vk.VkSubpassDescription,
+						{
+							pipelineBindPoint = "VK_PIPELINE_BIND_POINT_GRAPHICS",
+							colorAttachmentCount = 1,
+							pColorAttachments = colorAttachmentRef,
+						}
+					)
+
+					local dependency = vk.Box(
+						vk.VkSubpassDependency,
+						{
+							srcSubpass = 0xFFFFFFFF, -- VK_SUBPASS_EXTERNAL
+							dstSubpass = 0,
+							srcStageMask = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT"),
+							srcAccessMask = 0,
+							dstStageMask = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT"),
+							dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT"),
+						}
+					)
+
+					local renderPassInfo = vk.Box(
+						vk.VkRenderPassCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO",
+							attachmentCount = 1,
+							pAttachments = colorAttachment,
+							subpassCount = 1,
+							pSubpasses = subpass,
+							dependencyCount = 1,
+							pDependencies = dependency,
+						}
+					)
+
+					local ptr = vk.Box(vk.VkRenderPass)()
+					vk_assert(
+						lib.vkCreateRenderPass(self.ptr[0], renderPassInfo, nil, ptr),
+						"failed to create render pass"
+					)
+					local renderPass = setmetatable({ptr = ptr, device = self}, RenderPass)
+					return renderPass
+				end
+
+				function RenderPass:__gc()
+					lib.vkDestroyRenderPass(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			do -- framebuffer
+				local Framebuffer = {}
+				Framebuffer.__index = Framebuffer
+
+				function Device:CreateFramebuffer(renderPass, imageView, width, height)
+					local attachments = vk.Array(vk.VkImageView, 1, {imageView})
+
+					local framebufferInfo = vk.Box(
+						vk.VkFramebufferCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO",
+							renderPass = renderPass.ptr[0],
+							attachmentCount = 1,
+							pAttachments = attachments,
+							width = width,
+							height = height,
+							layers = 1,
+						}
+					)
+
+					local ptr = vk.Box(vk.VkFramebuffer)()
+					vk_assert(
+						lib.vkCreateFramebuffer(self.ptr[0], framebufferInfo, nil, ptr),
+						"failed to create framebuffer"
+					)
+					local framebuffer = setmetatable({ptr = ptr, device = self}, Framebuffer)
+					return framebuffer
+				end
+
+				function Framebuffer:__gc()
+					lib.vkDestroyFramebuffer(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			do -- image view
+				local ImageView = {}
+				ImageView.__index = ImageView
+
+				function Device:CreateImageView(image, format)
+					local viewInfo = vk.Box(
+						vk.VkImageViewCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO",
+							image = image,
+							viewType = "VK_IMAGE_VIEW_TYPE_2D",
+							format = format,
+							subresourceRange = {
+								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+								baseMipLevel = 0,
+								levelCount = 1,
+								baseArrayLayer = 0,
+								layerCount = 1,
+							},
+						}
+					)
+
+					local ptr = vk.Box(vk.VkImageView)()
+					vk_assert(
+						lib.vkCreateImageView(self.ptr[0], viewInfo, nil, ptr),
+						"failed to create image view"
+					)
+					local imageView = setmetatable({ptr = ptr, device = self}, ImageView)
+					return imageView
+				end
+
+				function ImageView:__gc()
+					lib.vkDestroyImageView(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			do -- pipeline layout
+				local PipelineLayout = {}
+				PipelineLayout.__index = PipelineLayout
+
+				function Device:CreatePipelineLayout()
+					local pipelineLayoutInfo = vk.Box(
+						vk.VkPipelineLayoutCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO",
+							setLayoutCount = 0,
+							pSetLayouts = nil,
+							pushConstantRangeCount = 0,
+							pPushConstantRanges = nil,
+						}
+					)
+
+					local ptr = vk.Box(vk.VkPipelineLayout)()
+					vk_assert(
+						lib.vkCreatePipelineLayout(self.ptr[0], pipelineLayoutInfo, nil, ptr),
+						"failed to create pipeline layout"
+					)
+					local pipelineLayout = setmetatable({ptr = ptr, device = self}, PipelineLayout)
+					return pipelineLayout
+				end
+
+				function PipelineLayout:__gc()
+					lib.vkDestroyPipelineLayout(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			do -- graphics pipeline
+				local Pipeline = {}
+				Pipeline.__index = Pipeline
+
+				function Device:CreateGraphicsPipeline(config)
+					-- config should contain: vertShaderModule, fragShaderModule, pipelineLayout, renderPass, extent
+					local vertShaderStageInfo = vk.Box(
+						vk.VkPipelineShaderStageCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
+							stage = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_VERTEX_BIT"),
+							module = config.vertShaderModule.ptr[0],
+							pName = "main",
+						}
+					)
+
+					local fragShaderStageInfo = vk.Box(
+						vk.VkPipelineShaderStageCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
+							stage = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT"),
+							module = config.fragShaderModule.ptr[0],
+							pName = "main",
+						}
+					)
+
+					-- Allocate shader stages array manually
+					local stageArrayType = ffi.typeof("$ [2]", vk.VkPipelineShaderStageCreateInfo)
+					local shaderStagesArray = ffi.new(stageArrayType)
+					shaderStagesArray[0] = vertShaderStageInfo[0]
+					shaderStagesArray[1] = fragShaderStageInfo[0]
+
+					local vertexInputInfo = vk.Box(
+						vk.VkPipelineVertexInputStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO",
+							vertexBindingDescriptionCount = 0,
+							pVertexBindingDescriptions = nil,
+							vertexAttributeDescriptionCount = 0,
+							pVertexAttributeDescriptions = nil,
+						}
+					)
+
+					local inputAssembly = vk.Box(
+						vk.VkPipelineInputAssemblyStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO",
+							topology = "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
+							primitiveRestartEnable = 0,
+						}
+					)
+
+					local viewport = vk.Box(
+						vk.VkViewport,
+						{
+							x = 0.0,
+							y = 0.0,
+							width = tonumber(config.extent.width),
+							height = tonumber(config.extent.height),
+							minDepth = 0.0,
+							maxDepth = 1.0,
+						}
+					)
+
+					local scissor = vk.Box(
+						vk.VkRect2D,
+						{
+							offset = {x = 0, y = 0},
+							extent = config.extent,
+						}
+					)
+
+					local viewportState = vk.Box(
+						vk.VkPipelineViewportStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO",
+							viewportCount = 1,
+							pViewports = viewport,
+							scissorCount = 1,
+							pScissors = scissor,
+						}
+					)
+
+					local rasterizer = vk.Box(
+						vk.VkPipelineRasterizationStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO",
+							depthClampEnable = 0,
+							rasterizerDiscardEnable = 0,
+							polygonMode = "VK_POLYGON_MODE_FILL",
+							lineWidth = 1.0,
+							cullMode = vk.VkCullModeFlagBits("VK_CULL_MODE_BACK_BIT"),
+							frontFace = "VK_FRONT_FACE_CLOCKWISE",
+							depthBiasEnable = 0,
+						}
+					)
+
+					local multisampling = vk.Box(
+						vk.VkPipelineMultisampleStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO",
+							sampleShadingEnable = 0,
+							rasterizationSamples = "VK_SAMPLE_COUNT_1_BIT",
+						}
+					)
+
+					local colorBlendAttachment = vk.Box(
+						vk.VkPipelineColorBlendAttachmentState,
+						{
+							colorWriteMask = bit.bor(
+								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_R_BIT"),
+								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_G_BIT"),
+								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_B_BIT"),
+								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_A_BIT")
+							),
+							blendEnable = 0,
+						}
+					)
+
+					local colorBlending = vk.Box(
+						vk.VkPipelineColorBlendStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO",
+							logicOpEnable = 0,
+							logicOp = "VK_LOGIC_OP_COPY",
+							attachmentCount = 1,
+							pAttachments = colorBlendAttachment,
+							blendConstants = {0.0, 0.0, 0.0, 0.0},
+						}
+					)
+
+					local pipelineInfo = vk.Box(
+						vk.VkGraphicsPipelineCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO",
+							stageCount = 2,
+							pStages = shaderStagesArray,
+							pVertexInputState = vertexInputInfo,
+							pInputAssemblyState = inputAssembly,
+							pViewportState = viewportState,
+							pRasterizationState = rasterizer,
+							pMultisampleState = multisampling,
+							pDepthStencilState = nil,
+							pColorBlendState = colorBlending,
+							pDynamicState = nil,
+							layout = config.pipelineLayout.ptr[0],
+							renderPass = config.renderPass.ptr[0],
+							subpass = 0,
+							basePipelineHandle = nil,
+							basePipelineIndex = -1,
+						}
+					)
+
+					local ptr = vk.Box(vk.VkPipeline)()
+					vk_assert(
+						lib.vkCreateGraphicsPipelines(self.ptr[0], nil, 1, pipelineInfo, nil, ptr),
+						"failed to create graphics pipeline"
+					)
+					local pipeline = setmetatable({ptr = ptr, device = self, config = config}, Pipeline)
+					return pipeline
+				end
+
+				function Pipeline:__gc()
+					lib.vkDestroyPipeline(self.device.ptr[0], self.ptr[0], nil)
 				end
 			end
 		end

@@ -10,7 +10,7 @@ local default_config = {
 	-- Swapchain settings
 	present_mode = "VK_PRESENT_MODE_FIFO_KHR", -- FIFO (vsync), IMMEDIATE (no vsync), MAILBOX (triple buffer)
 	image_count = nil, -- nil = minImageCount + 1 (usually triple buffer)
-	surface_format_index = 0, -- Which format from available formats to use
+	surface_format_index = 1, -- Which format from available formats to use
 	composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR", -- OPAQUE, PRE_MULTIPLIED, POST_MULTIPLIED, INHERIT
 	clipped = true, -- Clip pixels obscured by other windows
 	image_usage = nil, -- nil = COLOR_ATTACHMENT | TRANSFER_DST, or provide custom flags
@@ -51,10 +51,10 @@ function Renderer:Initialize(metal_surface)
 	self.present_modes = self.physical_device:GetPresentModes(self.surface)
 
 	-- Validate format index
-	if self.config.surface_format_index >= #self.surface_formats then
+	if self.config.surface_format_index > #self.surface_formats then
 		error(
 			"Invalid surface_format_index: " .. self.config.surface_format_index .. " (max: " .. (
-					#self.surface_formats - 1
+					#self.surface_formats
 				) .. ")"
 		)
 	end
@@ -71,11 +71,15 @@ function Renderer:Initialize(metal_surface)
 	-- Create swapchain
 	self.swapchain = self.device:CreateSwapchain(
 		self.surface,
-		self.surface_formats[self.config.surface_format_index + 1],
+		self.surface_formats[self.config.surface_format_index],
 		self.surface_capabilities,
 		swapchain_config
 	)
 	self.swapchain_images = self.swapchain:GetImages()
+	-- Get the image count for later use
+	local imageCount = ffi.new("uint32_t[1]", 0)
+	lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.swapchain.ptr[0], imageCount, nil)
+	self.swapchain_image_count = imageCount[0]
 	-- Create command buffer
 	self.command_buffer = self.command_pool:CreateCommandBuffer()
 	-- Create synchronization objects
@@ -84,7 +88,64 @@ function Renderer:Initialize(metal_surface)
 	self.in_flight_fence = self.device:CreateFence()
 	-- Get queue
 	self.queue = self.device:GetQueue(self.graphics_queue_family)
+
+	-- Initialize render pass and framebuffer management
+	self.render_pass = nil
+	self.image_views = {}
+	self.framebuffers = {}
+
 	return self
+end
+
+function Renderer:CreateRenderPass()
+	if self.render_pass then
+		return self.render_pass
+	end
+	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index])
+	return self.render_pass
+end
+
+function Renderer:CreateImageViews()
+	self.image_views = {}
+
+	for i = 0, self.swapchain_image_count - 1 do
+		local imageView = self.device:CreateImageView(
+			self.swapchain_images[i],
+			self.surface_formats[self.config.surface_format_index].format
+		)
+		table.insert(self.image_views, imageView)
+	end
+
+	return self.image_views
+end
+
+function Renderer:CreateFramebuffers()
+	if not self.render_pass then
+		error("Render pass must be created before framebuffers")
+	end
+
+	if #self.image_views == 0 then
+		error("Image views must be created before framebuffers")
+	end
+	
+	self.framebuffers = {}
+
+	local extent = self.surface_capabilities[0].currentExtent
+	for _, imageView in ipairs(self.image_views) do
+		local framebuffer = self.device:CreateFramebuffer(
+			self.render_pass,
+			imageView.ptr[0],
+			extent.width,
+			extent.height
+		)
+		table.insert(self.framebuffers, framebuffer)
+	end
+
+	return self.framebuffers
+end
+
+function Renderer:GetExtent()
+	return self.surface_capabilities[0].currentExtent
 end
 
 function Renderer:PrintCapabilities()
@@ -140,7 +201,7 @@ function Renderer:PrintCapabilities()
 	end
 end
 
-function Renderer:BeginFrame()
+function Renderer:BeginFrame(use_render_pass)
 	-- Wait for previous frame
 	self.in_flight_fence:Wait()
 	-- Acquire next image
@@ -148,15 +209,24 @@ function Renderer:BeginFrame()
 	-- Reset and begin command buffer
 	self.command_buffer:Reset()
 	self.command_buffer:Begin()
-	-- Transition image to transfer dst
-	self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
-	self.command_buffer:StartPipelineBarrier(self.barrier)
-	return self.command_buffer, self.image_index, self.swapchain_images
+
+	if use_render_pass then
+		-- For render pass mode, no image barrier needed - handled by render pass
+		return self.command_buffer, self.image_index, self.swapchain_images
+	else
+		-- Transition image to transfer dst
+		self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
+		self.command_buffer:StartPipelineBarrier(self.barrier)
+		return self.command_buffer, self.image_index, self.swapchain_images
+	end
 end
 
-function Renderer:EndFrame()
-	-- Transition image to present
-	self.command_buffer:EndPipelineBarrier(self.barrier)
+function Renderer:EndFrame(use_render_pass)
+	if not use_render_pass then
+		-- Transition image to present (only for transfer mode)
+		self.command_buffer:EndPipelineBarrier(self.barrier)
+	end
+
 	self.command_buffer:End()
 	-- Submit command buffer
 	self.queue:Submit(

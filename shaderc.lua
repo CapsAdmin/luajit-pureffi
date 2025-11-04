@@ -113,7 +113,7 @@ local function initialize()
 	if mod.compiler == nil then error("Failed to initialize shaderc compiler") end
 end
 
-function mod.compile(source, name, entry_point)
+function mod.compile(source, shader_type, entry_point)
     initialize()
 
 	-- Initialize shaderc
@@ -124,13 +124,24 @@ function mod.compile(source, name, entry_point)
 		error("Failed to initialize shaderc compile options")
 	end
 
+	-- Determine shader kind
+	local shader_kind
+	if shader_type == "vertex" or shader_type == "vert" then
+		shader_kind = ffi.C.shaderc_glsl_vertex_shader
+	elseif shader_type == "fragment" or shader_type == "frag" then
+		shader_kind = ffi.C.shaderc_glsl_fragment_shader
+	else
+		-- Default to vertex shader if not specified or use as filename
+		shader_kind = ffi.C.shaderc_glsl_vertex_shader
+	end
+
 	-- Compile the GLSL shader to SPIR-V
 	local result = lib.shaderc_compile_into_spv(
 		mod.compiler,
 		source,
 		#source,
-		ffi.C.shaderc_glsl_vertex_shader,
-		name or "unknown.glsl", -- input file name (for error messages)
+		shader_kind,
+		shader_type or "shader.glsl", -- input file name (for error messages)
 		entry_point or "main", -- entry point
 		options
 	)
@@ -150,11 +161,15 @@ function mod.compile(source, name, entry_point)
 	local spirv_size = lib.shaderc_result_get_length(result)
 	local spirv_data = lib.shaderc_result_get_bytes(result)
 
+	-- Copy the SPIR-V data before releasing the result
+	local spirv_copy = ffi.new("uint8_t[?]", spirv_size)
+	ffi.copy(spirv_copy, spirv_data, spirv_size)
+
     lib.shaderc_result_release(result)
     lib.shaderc_compile_options_release(options)
     --lib.shaderc_compiler_release(mod.compiler)
 
-	return spirv_data, spirv_size
+	return spirv_copy, spirv_size
 end
 
 return mod
