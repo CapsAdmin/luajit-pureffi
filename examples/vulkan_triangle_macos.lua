@@ -7,26 +7,20 @@ local shaderc = require("shaderc")
 local wnd = cocoa.window()
 local vk = vulkan.vk
 local lib = vulkan.lib
-
--- Initialize renderer
-local renderer = Renderer.New({
-	surface_handle = assert(wnd:GetMetalLayer()),
-	present_mode = "VK_PRESENT_MODE_FIFO_KHR",
-	image_count = nil, -- Use default (minImageCount + 1)
-	surface_format_index = 1,
-	composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR",
-})
-
+local renderer = Renderer.New(
+	{
+		surface_handle = assert(wnd:GetMetalLayer()),
+		present_mode = "VK_PRESENT_MODE_FIFO_KHR",
+		image_count = nil, -- Use default (minImageCount + 1)
+		surface_format_index = 1,
+		composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR",
+	}
+)
 renderer:PrintCapabilities()
-
 local renderPass = renderer:CreateRenderPass()
-
 renderer:CreateImageViews()
 renderer:CreateFramebuffers()
-
 local pipelineLayout = renderer.device:CreatePipelineLayout()
-
--- Shader source code (stored for pipeline recreation)
 local vertShaderSource = [[
     #version 450
 
@@ -49,7 +43,6 @@ local vertShaderSource = [[
         fragColor = colors[gl_VertexIndex];
     }
 ]]
-
 local fragShaderSource = [[
     #version 450
 
@@ -63,82 +56,51 @@ local fragShaderSource = [[
 
 local function createPipeline()
 	local extent = renderer:GetExtent()
-	return renderer.device:CreateGraphicsPipeline({
-		vertShaderModule = renderer.device:CreateShaderModule(vertShaderSource, "vertex"),
-		fragShaderModule = renderer.device:CreateShaderModule(fragShaderSource, "fragment"),
-		pipelineLayout = pipelineLayout,
-		renderPass = renderPass,
-		extent = extent,
-	})
+	return renderer.device:CreateGraphicsPipeline(
+		{
+			vertShaderModule = renderer.device:CreateShaderModule(vertShaderSource, "vertex"),
+			fragShaderModule = renderer.device:CreateShaderModule(fragShaderSource, "fragment"),
+			pipelineLayout = pipelineLayout,
+			renderPass = renderPass,
+			extent = extent,
+		}
+	)
 end
 
 local pipeline = createPipeline()
 
-print("Graphics pipeline created successfully")
+function renderer:OnRecreateSwapchain()
+	pipeline = createPipeline()
+end
 
--- Open window
+print("Graphics pipeline created successfully")
 wnd:Initialize()
 wnd:OpenWindow()
 
-local frame = 0
-
--- Main render loop
 while true do
 	local events = wnd:ReadEvents()
 
-	-- Handle window close
 	if events.window_close_requested then
 		print("Window close requested")
+
 		break
 	end
 
-	-- Handle window resize
-	if events.window_resized then
-		print("Window resized, recreating swapchain and pipeline...")
-		renderer:RecreateSwapchain()
+	if events.window_resized then renderer:RecreateSwapchain() end
 
-		-- Create new pipeline with updated extent
-		pipeline = createPipeline()
+	if renderer:BeginFrame() then
+		renderer:BeginPipelineBarrier()
+		local extent = renderer:GetExtent()
+		local cmd = renderer:GetCommandBuffer()
+		cmd:BeginRenderPass(renderer.render_pass, renderer:GetFramebuffer(), extent, {0.0, 0.0, 0.0, 1.0})
+		cmd:BindPipeline(pipeline)
+		cmd:Draw(3, 1, 0, 0)
+		cmd:EndRenderPass()
+		renderer:EndPipelineBarrier()
+		renderer:EndFrame()
 	end
 
-	local commandBuffer, imageIndex, swapchainImages, status = renderer:BeginFrame(true)
-
-	-- Recreate pipeline if swapchain was recreated
-	if status == "out_of_date" then
-		pipeline = createPipeline()
-		goto continue
-	end
-
-	-- Get current extent for render pass
-	local extent = renderer:GetExtent()
-
-	-- Begin render pass with clear color
-	commandBuffer:BeginRenderPass(
-		renderPass,
-		renderer.framebuffers[imageIndex[0] + 1],
-		extent,
-		{0.0, 0.0, 0.0, 1.0}
-	)
-
-	-- Bind pipeline and draw triangle
-	commandBuffer:BindPipeline(pipeline)
-	commandBuffer:Draw(3, 1, 0, 0)
-
-	-- End render pass
-	commandBuffer:EndRenderPass()
-
-	local present_status = renderer:EndFrame(true)
-
-	-- Recreate pipeline if swapchain was recreated
-	if present_status == "out_of_date" or present_status == "suboptimal" then
-		pipeline = createPipeline()
-	end
-
-	frame = frame + 1
 	threads.sleep(1)
-	::continue::
 end
 
--- Cleanup
-renderer:cleanup()
-print("Cleaned up successfully")
+renderer:WaitForIdle()

@@ -6,7 +6,6 @@ local Renderer = require("helpers.renderer")
 local wnd = cocoa.window()
 local vk = vulkan.vk
 local lib = vulkan.lib
-
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
@@ -48,26 +47,15 @@ end
 while true do
 	local events = wnd:ReadEvents()
 
-	-- Handle window close
 	if events.window_close_requested then
 		print("Window close requested")
+
 		break
 	end
 
-	-- Handle window resize
-	if events.window_resized then
-		print("Window resized, recreating swapchain...")
-		renderer:RecreateSwapchain()
-	end
+	if events.window_resized then renderer:RecreateSwapchain() end
 
-	local commandBuffer, imageIndex, swapchainImages, status = renderer:BeginFrame()
-
-	-- Skip frame if swapchain was recreated
-	if status == "out_of_date" then
-		goto continue
-	end
-
-	do -- rendering
+	if renderer:BeginFrame() then
 		local range = vk.Box(
 			vk.VkImageSubresourceRange,
 			{
@@ -79,8 +67,8 @@ while true do
 			}
 		)
 		lib.vkCmdClearColorImage(
-			commandBuffer.ptr[0],
-			swapchainImages[imageIndex[0]],
+			renderer:GetCommandBuffer().ptr[0],
+			renderer:GetSwapChainImage(),
 			"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
 			vk.Box(vk.VkClearColorValue, {
 				float32 = {hsv_to_rgb(frame % 1, 1, 1)},
@@ -88,13 +76,11 @@ while true do
 			1,
 			range
 		)
+		renderer:EndFrame()
 	end
 
-	renderer:EndFrame()
 	frame = frame + 0.01
 	threads.sleep(1)
-	::continue::
 end
 
--- Cleanup
-renderer:cleanup()
+renderer:WaitForIdle()

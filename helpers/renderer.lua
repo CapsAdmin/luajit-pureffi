@@ -3,7 +3,6 @@ local setmetatable = require("helpers.setmetatable_gc")
 local vulkan = require("helpers.vulkan")
 local vk = vulkan.vk
 local lib = vulkan.lib
-
 local Renderer = {}
 Renderer.__index = Renderer
 -- Default configuration
@@ -23,14 +22,10 @@ local default_config = {
 
 function Renderer.New(config)
 	config = config or {}
-	
-	for k, v in pairs(default_config) do
-		if config[k] == nil then
-			config[k] = v
-		end
-	end
 
-	
+	for k, v in pairs(default_config) do
+		if config[k] == nil then config[k] = v end
+	end
 
 	local self = setmetatable({}, Renderer)
 	self.config = config
@@ -40,11 +35,16 @@ end
 
 function Renderer:Initialize(metal_surface)
 	local layers = {}
+
 	if os.getenv("VULKAN_SDK") then
 		table.insert(layers, "VK_LAYER_KHRONOS_validation")
 	end
+
 	-- Vulkan initialization
-	self.instance = vulkan.CreateInstance({"VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"}, layers)
+	self.instance = vulkan.CreateInstance(
+		{"VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"},
+		layers
+	)
 	self.surface = self.instance:CreateMetalSurface(metal_surface)
 	self.physical_device = self.instance:GetPhysicalDevices()[1]
 	self.graphics_queue_family = self.physical_device:FindGraphicsQueueFamily(self.surface)
@@ -91,27 +91,26 @@ function Renderer:Initialize(metal_surface)
 	self.image_available_semaphores = {}
 	self.render_finished_semaphores = {}
 	self.in_flight_fences = {}
+
 	for i = 1, self.swapchain_image_count do
 		self.image_available_semaphores[i] = self.device:CreateSemaphore()
 		self.render_finished_semaphores[i] = self.device:CreateSemaphore()
 		self.in_flight_fences[i] = self.device:CreateFence()
 	end
+
 	-- Get queue
 	self.queue = self.device:GetQueue(self.graphics_queue_family)
-
 	-- Initialize render pass and framebuffer management
 	self.render_pass = nil
 	self.image_views = {}
 	self.framebuffers = {}
 	self.current_frame = 0
-
 	return self
 end
 
 function Renderer:CreateRenderPass()
-	if self.render_pass then
-		return self.render_pass
-	end
+	if self.render_pass then return self.render_pass end
+
 	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index])
 	return self.render_pass
 end
@@ -120,10 +119,7 @@ function Renderer:CreateImageViews()
 	self.image_views = {}
 
 	for i = 0, self.swapchain_image_count - 1 do
-		local imageView = self.device:CreateImageView(
-			self.swapchain_images[i],
-			self.surface_formats[self.config.surface_format_index].format
-		)
+		local imageView = self.device:CreateImageView(self.swapchain_images[i], self.surface_formats[self.config.surface_format_index].format)
 		table.insert(self.image_views, imageView)
 	end
 
@@ -138,17 +134,12 @@ function Renderer:CreateFramebuffers()
 	if #self.image_views == 0 then
 		error("Image views must be created before framebuffers")
 	end
-	
-	self.framebuffers = {}
 
+	self.framebuffers = {}
 	local extent = self.surface_capabilities[0].currentExtent
+
 	for _, imageView in ipairs(self.image_views) do
-		local framebuffer = self.device:CreateFramebuffer(
-			self.render_pass,
-			imageView.ptr[0],
-			extent.width,
-			extent.height
-		)
+		local framebuffer = self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height)
 		table.insert(self.framebuffers, framebuffer)
 	end
 
@@ -212,43 +203,48 @@ function Renderer:PrintCapabilities()
 	end
 end
 
-function Renderer:BeginFrame(use_render_pass)
+function Renderer:BeginFrame()
 	-- Use round-robin frame index
 	self.current_frame = (self.current_frame % self.swapchain_image_count) + 1
-
 	-- Acquire next image (before waiting on fence, so we know which image to wait for)
 	self.image_index, self.acquire_status = self.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
 
 	-- Check if swapchain needs recreation
 	if self.acquire_status == "out_of_date" or self.image_index == nil then
 		self:RecreateSwapchain()
-		return nil, nil, nil, "out_of_date"
+		return nil
 	end
 
 	-- Wait for the fence for this frame (ensures previous use of this image is complete)
 	self.in_flight_fences[self.current_frame]:Wait()
-
 	-- Reset and begin command buffer
 	self.command_buffer:Reset()
 	self.command_buffer:Begin()
-
-	if use_render_pass then
-		-- For render pass mode, no image barrier needed - handled by render pass
-		return self.command_buffer, self.image_index, self.swapchain_images, self.acquire_status
-	else
-		-- Transition image to transfer dst
-		self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
-		self.command_buffer:StartPipelineBarrier(self.barrier)
-		return self.command_buffer, self.image_index, self.swapchain_images, self.acquire_status
-	end
+	return true
 end
 
-function Renderer:EndFrame(use_render_pass)
-	if not use_render_pass then
-		-- Transition image to present (only for transfer mode)
-		self.command_buffer:EndPipelineBarrier(self.barrier)
-	end
+function Renderer:BeginPipelineBarrier()
+	self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
+	self.command_buffer:StartPipelineBarrier(self.barrier)
+end
 
+function Renderer:EndPipelineBarrier()
+	self.command_buffer:EndPipelineBarrier(self.barrier)
+end
+
+function Renderer:GetCommandBuffer()
+	return self.command_buffer
+end
+
+function Renderer:GetSwapChainImage()
+	return self.swapchain_images[self.image_index[0]]
+end
+
+function Renderer:GetFramebuffer()
+	return self.framebuffers[self.image_index[0] + 1]
+end
+
+function Renderer:EndFrame()
 	self.command_buffer:End()
 	-- Submit command buffer with current frame's semaphores
 	self.queue:Submit(
@@ -271,10 +267,8 @@ end
 function Renderer:RecreateSwapchain()
 	-- Wait for device to be idle before recreating
 	lib.vkDeviceWaitIdle(self.device.ptr[0])
-
 	-- Re-query surface capabilities (they may have changed)
 	self.surface_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
-
 	-- Build swapchain config
 	local swapchain_config = {
 		present_mode = self.config.present_mode,
@@ -284,7 +278,6 @@ function Renderer:RecreateSwapchain()
 		image_usage = self.config.image_usage,
 		pre_transform = self.config.pre_transform,
 	}
-
 	-- Create new swapchain
 	self.swapchain = self.device:CreateSwapchain(
 		self.surface,
@@ -294,7 +287,6 @@ function Renderer:RecreateSwapchain()
 		self.swapchain -- old swapchain for efficient recreation
 	)
 	self.swapchain_images = self.swapchain:GetImages()
-
 	-- Update image count
 	local imageCount = ffi.new("uint32_t[1]", 0)
 	lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.swapchain.ptr[0], imageCount, nil)
@@ -306,11 +298,13 @@ function Renderer:RecreateSwapchain()
 		self.image_available_semaphores = {}
 		self.render_finished_semaphores = {}
 		self.in_flight_fences = {}
+
 		for i = 1, self.swapchain_image_count do
 			self.image_available_semaphores[i] = self.device:CreateSemaphore()
 			self.render_finished_semaphores[i] = self.device:CreateSemaphore()
 			self.in_flight_fences[i] = self.device:CreateFence()
 		end
+
 		self.current_frame = 0
 	end
 
@@ -319,6 +313,11 @@ function Renderer:RecreateSwapchain()
 		self:CreateImageViews()
 		self:CreateFramebuffers()
 	end
+
+	self:OnRecreateSwapchain()
+end
+
+function Renderer:OnRecreateSwapchain() -- Override in derived classes if needed
 end
 
 function Renderer:NeedsRecreation()
@@ -326,11 +325,10 @@ function Renderer:NeedsRecreation()
 	local new_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
 	local old_extent = self.surface_capabilities[0].currentExtent
 	local new_extent = new_capabilities[0].currentExtent
-
 	return old_extent.width ~= new_extent.width or old_extent.height ~= new_extent.height
 end
 
-function Renderer:cleanup()
+function Renderer:WaitForIdle()
 	lib.vkDeviceWaitIdle(self.device.ptr[0])
 end
 
