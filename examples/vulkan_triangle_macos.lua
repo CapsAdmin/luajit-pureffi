@@ -89,14 +89,12 @@ while true do
 	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
-		renderer:BeginPipelineBarrier()
 		local extent = renderer:GetExtent()
 		local cmd = renderer:GetCommandBuffer()
 		cmd:BeginRenderPass(renderer.render_pass, renderer:GetFramebuffer(), extent, {0.0, 0.0, 0.0, 1.0})
 		cmd:BindPipeline(pipeline)
 		cmd:Draw(3, 1, 0, 0)
 		cmd:EndRenderPass()
-		renderer:EndPipelineBarrier()
 		renderer:EndFrame()
 	end
 

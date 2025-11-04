@@ -85,8 +85,11 @@ function Renderer:Initialize(metal_surface)
 	local imageCount = ffi.new("uint32_t[1]", 0)
 	lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.swapchain.ptr[0], imageCount, nil)
 	self.swapchain_image_count = imageCount[0]
-	-- Create command buffer
-	self.command_buffer = self.command_pool:CreateCommandBuffer()
+	-- Create command buffers (one per swapchain image)
+	self.command_buffers = {}
+	for i = 1, self.swapchain_image_count do
+		self.command_buffers[i] = self.command_pool:CreateCommandBuffer()
+	end
 	-- Create synchronization objects (one set per swapchain image)
 	self.image_available_semaphores = {}
 	self.render_finished_semaphores = {}
@@ -206,7 +209,11 @@ end
 function Renderer:BeginFrame()
 	-- Use round-robin frame index
 	self.current_frame = (self.current_frame % self.swapchain_image_count) + 1
-	-- Acquire next image (before waiting on fence, so we know which image to wait for)
+
+	-- Wait for the fence for this frame FIRST (ensures previous use of this frame's resources is complete)
+	self.in_flight_fences[self.current_frame]:Wait()
+
+	-- Acquire next image (after waiting on fence)
 	self.image_index, self.acquire_status = self.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
 
 	-- Check if swapchain needs recreation
@@ -215,11 +222,10 @@ function Renderer:BeginFrame()
 		return nil
 	end
 
-	-- Wait for the fence for this frame (ensures previous use of this image is complete)
-	self.in_flight_fences[self.current_frame]:Wait()
-	-- Reset and begin command buffer
-	self.command_buffer:Reset()
-	self.command_buffer:Begin()
+	-- Reset and begin command buffer for this frame
+	local command_buffer = self.command_buffers[self.current_frame]
+	command_buffer:Reset()
+	command_buffer:Begin()
 	return true
 end
 
@@ -233,7 +239,7 @@ function Renderer:EndPipelineBarrier()
 end
 
 function Renderer:GetCommandBuffer()
-	return self.command_buffer
+	return self.command_buffers[self.current_frame]
 end
 
 function Renderer:GetSwapChainImage()
@@ -245,10 +251,11 @@ function Renderer:GetFramebuffer()
 end
 
 function Renderer:EndFrame()
-	self.command_buffer:End()
+	local command_buffer = self.command_buffers[self.current_frame]
+	command_buffer:End()
 	-- Submit command buffer with current frame's semaphores
 	self.queue:Submit(
-		self.command_buffer,
+		command_buffer,
 		self.image_available_semaphores[self.current_frame],
 		self.render_finished_semaphores[self.current_frame],
 		self.in_flight_fences[self.current_frame]
@@ -293,13 +300,15 @@ function Renderer:RecreateSwapchain()
 	local old_count = self.swapchain_image_count
 	self.swapchain_image_count = imageCount[0]
 
-	-- Recreate synchronization objects if count changed
+	-- Recreate synchronization objects and command buffers if count changed
 	if old_count ~= self.swapchain_image_count then
+		self.command_buffers = {}
 		self.image_available_semaphores = {}
 		self.render_finished_semaphores = {}
 		self.in_flight_fences = {}
 
 		for i = 1, self.swapchain_image_count do
+			self.command_buffers[i] = self.command_pool:CreateCommandBuffer()
 			self.image_available_semaphores[i] = self.device:CreateSemaphore()
 			self.render_finished_semaphores[i] = self.device:CreateSemaphore()
 			self.in_flight_fences[i] = self.device:CreateFence()

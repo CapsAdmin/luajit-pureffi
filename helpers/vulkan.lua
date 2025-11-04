@@ -556,13 +556,16 @@ do -- instance
 						lib.vkResetCommandBuffer(self.ptr[0], 0)
 					end
 
-					function CommandBuffer:CreateImageMemoryBarrier(imageIndex, swapchainImages)
+					function CommandBuffer:CreateImageMemoryBarrier(imageIndex, swapchainImages, isFirstFrame)
+						-- For first frame, transition from UNDEFINED
+						-- For subsequent frames, transition from PRESENT_SRC_KHR (what the render pass leaves it in)
+						local oldLayout = isFirstFrame and "VK_IMAGE_LAYOUT_UNDEFINED" or "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR"
 						local barrier = vk.Box(
 							vk.VkImageMemoryBarrier,
 							{
 								sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
-								oldLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
-								newLayout = "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+								oldLayout = oldLayout,
+								newLayout = "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
 								srcQueueFamilyIndex = 0xFFFFFFFF,
 								dstQueueFamilyIndex = 0xFFFFFFFF,
 								image = swapchainImages[imageIndex[0]],
@@ -574,7 +577,7 @@ do -- instance
 									layerCount = 1,
 								},
 								srcAccessMask = 0,
-								dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_TRANSFER_WRITE_BIT"),
+								dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT"),
 							}
 						)
 						return barrier
