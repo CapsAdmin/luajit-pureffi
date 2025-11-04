@@ -215,6 +215,33 @@ do -- instance
 				lib.vkDestroyDevice(self.ptr[0], nil)
 			end
 
+			do -- shader
+				local ShaderModule = {}
+				ShaderModule.__index = ShaderModule
+
+				function Device:CreateShaderModule(spirv_data, spirv_size)
+					local shaderModuleCreateInfo = vk.Box(
+						vk.VkShaderModuleCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO",
+							codeSize = spirv_size,
+							pCode = ffi.cast("const uint32_t*", spirv_data),
+						}
+					)
+					local ptr = vk.Box(vk.VkShaderModule)()
+					vk_assert(
+						lib.vkCreateShaderModule(self.ptr[0], shaderModuleCreateInfo, nil, ptr),
+						"failed to create shader module"
+					)
+					local shaderModule = setmetatable({ptr = ptr, device = self}, ShaderModule)
+					return shaderModule
+				end
+
+				function ShaderModule:__gc()
+					lib.vkDestroyShaderModule(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
 			do -- queue
 				local Queue = {}
 				Queue.__index = Queue
