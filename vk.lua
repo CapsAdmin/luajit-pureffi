@@ -97,7 +97,9 @@ local mod = {}
 			for _, name in ipairs(tbl) do
 				local status, lib = pcall(ffi.load, name)
 
-				if status then return lib else table.insert(errors, lib) end
+				if status then
+					print("Loaded Vulkan library:", name)
+					return lib else table.insert(errors, lib) end
 			end
 
 			return nil, table.concat(errors, "\n")
@@ -113,6 +115,7 @@ local mod = {}
 
 			-- Try MoltenVK directly first (more reliable on macOS)
 			if home then
+				table.insert(paths, home .. "/VulkanSDK/1.4.328.1/macOS/lib/libvulkan.1.dylib")
 				table.insert(paths, home .. "/VulkanSDK/1.4.328.1/macOS/lib/libMoltenVK.dylib")
 			end
 

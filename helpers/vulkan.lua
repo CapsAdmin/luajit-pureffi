@@ -15,11 +15,36 @@ local function vk_assert(result, msg)
 	end
 end
 
+function vulkan.GetAvailableLayers()
+	-- First, enumerate available layers
+	local layerCount = ffi.new("uint32_t[1]", 0)
+	lib.vkEnumerateInstanceLayerProperties(layerCount, nil)
+	local out = {}
+
+	if layerCount[0] > 0 then
+		local availableLayers = vk.Array(vk.VkLayerProperties)(layerCount[0])
+		lib.vkEnumerateInstanceLayerProperties(layerCount, availableLayers)
+
+		for i = 0, layerCount[0] - 1 do
+			local layerName = ffi.string(availableLayers[i].layerName)
+			table.insert(out, layerName)
+		end
+	end
+
+	return out
+end
+
 do -- instance
 	local Instance = {}
 	Instance.__index = Instance
 
-	function vulkan.CreateInstance(extensions)
+	function vulkan.CreateInstance(extensions, layers)
+
+		print("layers available:")
+		for k,v in ipairs(vulkan.GetAvailableLayers()) do
+			print("\t" .. v)
+		end
+		
 		local appInfo = vk.Box(
 			vk.VkApplicationInfo,
 			{
@@ -31,17 +56,20 @@ do -- instance
 				apiVersion = vk.VK_API_VERSION_1_0,
 			}
 		)
-		local extension_names = vk.Array(ffi.typeof("const char*"), #extensions, extensions)
+		local extension_names = extensions and
+			vk.Array(ffi.typeof("const char*"), #extensions, extensions) or
+			nil
+		local layer_names = layers and vk.Array(ffi.typeof("const char*"), #layers, layers) or nil
 		local createInfo = vk.Box(
 			vk.VkInstanceCreateInfo,
 			{
 				sType = "VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO",
 				pNext = nil,
-				flags = 0,
+				flags = vk.VkInstanceCreateFlagBits("VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR"),
 				pApplicationInfo = appInfo,
-				enabledLayerCount = 0,
-				ppEnabledLayerNames = nil,
-				enabledExtensionCount = #extensions,
+				enabledLayerCount = layers and #layers or 0,
+				ppEnabledLayerNames = layer_names,
+				enabledExtensionCount = extensions and #extensions or 0,
 				ppEnabledExtensionNames = extension_names,
 			}
 		)
@@ -80,7 +108,9 @@ do -- instance
 		end
 
 		function Instance:__gc()
-			lib.vkDestroySurfaceKHR(self.instance.ptr[0], self.ptr[0], nil)
+			if self.instance then
+				lib.vkDestroySurfaceKHR(self.instance.ptr[0], self.ptr[0], nil)
+			end
 		end
 	end
 
@@ -147,12 +177,13 @@ do -- instance
 			local count = formatCount[0]
 			local formats = vk.Array(vk.VkSurfaceFormatKHR)(count)
 			lib.vkGetPhysicalDeviceSurfaceFormatsKHR(self.ptr, surface.ptr[0], formatCount, formats)
-
 			-- Convert to Lua table
 			local result = {}
+
 			for i = 0, count - 1 do
 				result[i + 1] = formats[i]
 			end
+
 			return result
 		end
 
@@ -171,12 +202,13 @@ do -- instance
 			local count = presentModeCount[0]
 			local presentModes = vk.Array(vk.VkPresentModeKHR)(count)
 			lib.vkGetPhysicalDeviceSurfacePresentModesKHR(self.ptr, surface.ptr[0], presentModeCount, presentModes)
-
 			-- Convert to Lua table
 			local result = {}
+
 			for i = 0, count - 1 do
 				result[i + 1] = presentModes[i]
 			end
+
 			return result
 		end
 
@@ -305,16 +337,21 @@ do -- instance
 					local compositeAlpha = config.compositeAlpha or "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR"
 					local clipped = config.clipped ~= nil and (config.clipped and 1 or 0) or 1
 					local preTransform = config.preTransform or surfaceCapabilities[0].currentTransform
-					local imageUsage = config.imageUsage or bit.bor(
-						vk.VkImageUsageFlagBits("VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT"),
-						vk.VkImageUsageFlagBits("VK_IMAGE_USAGE_TRANSFER_DST_BIT")
-					)
+					local imageUsage = config.imageUsage or
+						bit.bor(
+							vk.VkImageUsageFlagBits("VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT"),
+							vk.VkImageUsageFlagBits("VK_IMAGE_USAGE_TRANSFER_DST_BIT")
+						)
 
 					-- Clamp image count to valid range
 					if imageCount < surfaceCapabilities[0].minImageCount then
 						imageCount = surfaceCapabilities[0].minImageCount
 					end
-					if surfaceCapabilities[0].maxImageCount > 0 and imageCount > surfaceCapabilities[0].maxImageCount then
+
+					if
+						surfaceCapabilities[0].maxImageCount > 0 and
+						imageCount > surfaceCapabilities[0].maxImageCount
+					then
 						imageCount = surfaceCapabilities[0].maxImageCount
 					end
 
@@ -548,7 +585,6 @@ do -- instance
 								},
 							}
 						)
-
 						local renderPassInfo = vk.Box(
 							vk.VkRenderPassBeginInfo,
 							{
@@ -563,7 +599,6 @@ do -- instance
 								pClearValues = clearValue,
 							}
 						)
-
 						lib.vkCmdBeginRenderPass(
 							self.ptr[0],
 							renderPassInfo,
@@ -666,7 +701,6 @@ do -- instance
 							finalLayout = "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
 						}
 					)
-
 					local colorAttachmentRef = vk.Box(
 						vk.VkAttachmentReference,
 						{
@@ -674,7 +708,6 @@ do -- instance
 							layout = "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
 						}
 					)
-
 					local subpass = vk.Box(
 						vk.VkSubpassDescription,
 						{
@@ -683,7 +716,6 @@ do -- instance
 							pColorAttachments = colorAttachmentRef,
 						}
 					)
-
 					local dependency = vk.Box(
 						vk.VkSubpassDependency,
 						{
@@ -695,7 +727,6 @@ do -- instance
 							dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT"),
 						}
 					)
-
 					local renderPassInfo = vk.Box(
 						vk.VkRenderPassCreateInfo,
 						{
@@ -708,7 +739,6 @@ do -- instance
 							pDependencies = dependency,
 						}
 					)
-
 					local ptr = vk.Box(vk.VkRenderPass)()
 					vk_assert(
 						lib.vkCreateRenderPass(self.ptr[0], renderPassInfo, nil, ptr),
@@ -729,7 +759,6 @@ do -- instance
 
 				function Device:CreateFramebuffer(renderPass, imageView, width, height)
 					local attachments = vk.Array(vk.VkImageView, 1, {imageView})
-
 					local framebufferInfo = vk.Box(
 						vk.VkFramebufferCreateInfo,
 						{
@@ -742,7 +771,6 @@ do -- instance
 							layers = 1,
 						}
 					)
-
 					local ptr = vk.Box(vk.VkFramebuffer)()
 					vk_assert(
 						lib.vkCreateFramebuffer(self.ptr[0], framebufferInfo, nil, ptr),
@@ -778,7 +806,6 @@ do -- instance
 							},
 						}
 					)
-
 					local ptr = vk.Box(vk.VkImageView)()
 					vk_assert(
 						lib.vkCreateImageView(self.ptr[0], viewInfo, nil, ptr),
@@ -808,7 +835,6 @@ do -- instance
 							pPushConstantRanges = nil,
 						}
 					)
-
 					local ptr = vk.Box(vk.VkPipelineLayout)()
 					vk_assert(
 						lib.vkCreatePipelineLayout(self.ptr[0], pipelineLayoutInfo, nil, ptr),
@@ -838,7 +864,6 @@ do -- instance
 							pName = "main",
 						}
 					)
-
 					local fragShaderStageInfo = vk.Box(
 						vk.VkPipelineShaderStageCreateInfo,
 						{
@@ -848,13 +873,11 @@ do -- instance
 							pName = "main",
 						}
 					)
-
 					-- Allocate shader stages array manually
 					local stageArrayType = ffi.typeof("$ [2]", vk.VkPipelineShaderStageCreateInfo)
 					local shaderStagesArray = ffi.new(stageArrayType)
 					shaderStagesArray[0] = vertShaderStageInfo[0]
 					shaderStagesArray[1] = fragShaderStageInfo[0]
-
 					local vertexInputInfo = vk.Box(
 						vk.VkPipelineVertexInputStateCreateInfo,
 						{
@@ -865,7 +888,6 @@ do -- instance
 							pVertexAttributeDescriptions = nil,
 						}
 					)
-
 					local inputAssembly = vk.Box(
 						vk.VkPipelineInputAssemblyStateCreateInfo,
 						{
@@ -874,7 +896,6 @@ do -- instance
 							primitiveRestartEnable = 0,
 						}
 					)
-
 					local viewport = vk.Box(
 						vk.VkViewport,
 						{
@@ -886,7 +907,6 @@ do -- instance
 							maxDepth = 1.0,
 						}
 					)
-
 					local scissor = vk.Box(
 						vk.VkRect2D,
 						{
@@ -894,7 +914,6 @@ do -- instance
 							extent = config.extent,
 						}
 					)
-
 					local viewportState = vk.Box(
 						vk.VkPipelineViewportStateCreateInfo,
 						{
@@ -905,7 +924,6 @@ do -- instance
 							pScissors = scissor,
 						}
 					)
-
 					local rasterizer = vk.Box(
 						vk.VkPipelineRasterizationStateCreateInfo,
 						{
@@ -919,7 +937,6 @@ do -- instance
 							depthBiasEnable = 0,
 						}
 					)
-
 					local multisampling = vk.Box(
 						vk.VkPipelineMultisampleStateCreateInfo,
 						{
@@ -928,7 +945,6 @@ do -- instance
 							rasterizationSamples = "VK_SAMPLE_COUNT_1_BIT",
 						}
 					)
-
 					local colorBlendAttachment = vk.Box(
 						vk.VkPipelineColorBlendAttachmentState,
 						{
@@ -941,7 +957,6 @@ do -- instance
 							blendEnable = 0,
 						}
 					)
-
 					local colorBlending = vk.Box(
 						vk.VkPipelineColorBlendStateCreateInfo,
 						{
@@ -953,7 +968,6 @@ do -- instance
 							blendConstants = {0.0, 0.0, 0.0, 0.0},
 						}
 					)
-
 					local pipelineInfo = vk.Box(
 						vk.VkGraphicsPipelineCreateInfo,
 						{
@@ -975,7 +989,6 @@ do -- instance
 							basePipelineIndex = -1,
 						}
 					)
-
 					local ptr = vk.Box(vk.VkPipeline)()
 					vk_assert(
 						lib.vkCreateGraphicsPipelines(self.ptr[0], nil, 1, pipelineInfo, nil, ptr),

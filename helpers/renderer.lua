@@ -39,8 +39,12 @@ function Renderer.New(config)
 end
 
 function Renderer:Initialize(metal_surface)
+	local layers = {}
+	if os.getenv("VULKAN_SDK") then
+		table.insert(layers, "VK_LAYER_KHRONOS_validation")
+	end
 	-- Vulkan initialization
-	self.instance = vulkan.CreateInstance({"VK_KHR_surface", "VK_EXT_metal_surface"})
+	self.instance = vulkan.CreateInstance({"VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"}, layers)
 	self.surface = self.instance:CreateMetalSurface(metal_surface)
 	self.physical_device = self.instance:GetPhysicalDevices()[1]
 	self.graphics_queue_family = self.physical_device:FindGraphicsQueueFamily(self.surface)
@@ -257,20 +261,6 @@ end
 function Renderer:RecreateSwapchain()
 	-- Wait for device to be idle before recreating
 	lib.vkDeviceWaitIdle(self.device.ptr[0])
-
-	-- Clean up old framebuffers and image views
-	for _, framebuffer in ipairs(self.framebuffers) do
-		--lib.vkDestroyFramebuffer(self.device.ptr[0], framebuffer.ptr[0], nil)
-	end
-	self.framebuffers = {}
-
-	for _, imageView in ipairs(self.image_views) do
-	--	lib.vkDestroyImageView(self.device.ptr[0], imageView.ptr[0], nil)
-	end
-	self.image_views = {}
-
-	-- Destroy old swapchain
-	--lib.vkDestroySwapchainKHR(self.device.ptr[0], self.swapchain.ptr[0], nil)
 
 	-- Re-query surface capabilities (they may have changed)
 	self.surface_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)

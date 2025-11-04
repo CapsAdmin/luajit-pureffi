@@ -97,9 +97,6 @@ while true do
 		print("Window resized, recreating swapchain and pipeline...")
 		renderer:RecreateSwapchain()
 
-		-- Destroy old pipeline
-		lib.vkDestroyPipeline(renderer.device.ptr[0], pipeline.ptr[0], nil)
-
 		-- Create new pipeline with updated extent
 		pipeline = createPipeline()
 	end
@@ -108,13 +105,7 @@ while true do
 
 	-- Recreate pipeline if swapchain was recreated
 	if status == "out_of_date" then
-		-- Destroy old pipeline
-		lib.vkDestroyPipeline(renderer.device.ptr[0], pipeline.ptr[0], nil)
-
-		-- Create new pipeline with updated extent
 		pipeline = createPipeline()
-
-		-- Skip this frame
 		goto continue
 	end
 
@@ -140,10 +131,6 @@ while true do
 
 	-- Recreate pipeline if swapchain was recreated
 	if present_status == "out_of_date" or present_status == "suboptimal" then
-		-- Destroy old pipeline
-		lib.vkDestroyPipeline(renderer.device.ptr[0], pipeline.ptr[0], nil)
-
-		-- Create new pipeline with updated extent
 		pipeline = createPipeline()
 	end
 

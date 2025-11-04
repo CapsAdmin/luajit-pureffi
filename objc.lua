@@ -40,7 +40,7 @@ void free(void *ptr);
 void objc_msgSend(void);
 void objc_registerClassPair(Class cls);
 ]])
-ffi.load("/usr/lib/libobjc.A.dylib", true)
+assert(ffi.load("/usr/lib/libobjc.A.dylib", true))
 local type_encoding = setmetatable(
 	{
 		["c"] = "char",
@@ -64,6 +64,7 @@ local type_encoding = setmetatable(
 		["^"] = "void*",
 		["?"] = "void",
 		["r*"] = "char*",
+		["r^v"] = "const void*",
 	},
 	{
 		__index = function(_, k)
@@ -77,6 +78,10 @@ local type_encoding = setmetatable(
 		__newindex = nil, -- read only table
 	}
 )
+
+local function table_pack(...)
+	return { n = select("#", ...), ... }
+end
 
 ---convert a NULL pointer to nil
 ---@param p cdata pointer
@@ -120,32 +125,30 @@ local function sel(name, num_args)
 		name = name .. "_"
 	end
 
-	local name, count = name:gsub("_", ":")
-
+	local name, count = name:gsub("_", ":") ---@diagnostic disable-line: redefined-local
 	if num_args then assert(count == num_args) end
 
 	return C.sel_registerName(name) -- pointer is never NULL
 end
 
 ---call a method for a SEL on a Class or object
----@param receiver string | Class | id the class or object
+---@param self string | Class | id the class or object
 ---@param selector string | SEL name of method
 ---@param ...? any additional method parameters
 ---@return any
-local function msgSend(receiver, selector, ...)
+local function msgSend(self, selector, ...)
 	---return Method for Class or object and SEL
-	---@param receiver Class | id
+	---@param self Class | id
 	---@param selector SEL
 	---@return Method?
-	local function getMethod(receiver, selector)
-		-- return method for Class or object and SEL
-		if ffi.istype("Class", receiver) then
-			return assert(ptr(C.class_getClassMethod(receiver, selector)))
-		elseif ffi.istype("id", receiver) then
-			return assert(ptr(C.class_getInstanceMethod(cls(receiver), selector)))
+	local function getMethod(self, selector) ---@diagnostic disable-line: redefined-local
+		if ffi.istype("Class", self) then
+			return assert(ptr(C.class_getClassMethod(self, selector)))
+		elseif ffi.istype("id", self) then
+			return assert(ptr(C.class_getInstanceMethod(cls(self), selector)))
 		end
 
-		assert(false, "receiver not a Class or object")
+		assert(false, "self not a Class or object")
 	end
 
 	---convert a Lua variable to a C type if needed
@@ -155,26 +158,24 @@ local function msgSend(receiver, selector, ...)
 	local function convert(lua_var, c_type)
 		if type(lua_var) == "string" then
 			if c_type == "SEL" then
-				-- print("creating SEL from " .. lua_var)
 				return sel(lua_var)
 			elseif c_type == "char*" then
-				-- print("creating char* from " .. lua_var)
 				return ffi.cast(c_type, lua_var)
 			end
 		elseif type(lua_var) == "cdata" and c_type == "id" and ffi.istype("Class", lua_var) then
-			-- sometimes method signatures use id instead of Class
-			-- print("casting " .. tostring(lua_var) .. " to id")
-			return ffi.cast(c_type, lua_var)
+			return ffi.cast(c_type, lua_var) -- sometimes method signatures use id instead of Class
+		elseif lua_var == nil then
+			return ffi.new(c_type) -- convert to a null pointer
 		end
 
 		return lua_var -- no conversion necessary
 	end
 
-	if type(receiver) == "string" then receiver = cls(receiver) end
+	if type(self) == "string" then self = cls(self) end
 
-	local selector = sel(selector)
-	local method = getMethod(receiver, selector)
-	local call_args = {receiver, selector, ...}
+	local selector = sel(selector) ---@diagnostic disable-line: redefined-local
+	local method = getMethod(self, selector)
+	local call_args = table_pack(self, selector, ...)
 	local char_ptr = assert(ptr(C.method_copyReturnType(method)))
 	local objc_type = ffi.string(char_ptr)
 	C.free(char_ptr)
@@ -183,7 +184,7 @@ local function msgSend(receiver, selector, ...)
 	table.insert(signature, c_type)
 	table.insert(signature, "(*)(")
 	local num_method_args = C.method_getNumberOfArguments(method)
-	assert(num_method_args == #call_args)
+	assert(num_method_args == call_args.n)
 
 	for i = 1, num_method_args do
 		char_ptr = assert(ptr(C.method_copyArgumentType(method, i - 1)))
@@ -197,16 +198,17 @@ local function msgSend(receiver, selector, ...)
 	end
 
 	table.insert(signature, ")")
-	local signature = table.concat(signature)
-	-- print(receiver, selector, signature)
-	return ffi.cast(signature, C.objc_msgSend)(unpack(call_args))
+	local signature = table.concat(signature) ---@diagnostic disable-line: redefined-local
+	return ptr(ffi.cast(signature, C.objc_msgSend)(unpack(call_args, 1, call_args.n)))
 end
 
 ---load a Framework
 ---@param framework string framework name without the '.framework' extension
 local function loadFramework(framework)
 	-- on newer versions of MacOS this is a broken symbolic link, but dlopen() still succeeds
-	ffi.load(string.format("/System/Library/Frameworks/%s.framework/%s", framework, framework), true)
+	assert(
+		ffi.load(string.format("/System/Library/Frameworks/%s.framework/%s", framework, framework), true)
+	)
 end
 
 ---create a new custom class from an optional base class
@@ -215,7 +217,7 @@ end
 ---@return Class
 local function newClass(name, super_class)
 	assert(name and type(name) == "string")
-	local super_class = cls(super_class or "NSObject")
+	local super_class = cls(super_class or "NSObject") ---@diagnostic disable-line: redefined-local
 	local class = assert(ptr(C.objc_allocateClassPair(super_class, name, 0)))
 	C.objc_registerClassPair(class)
 	return class
@@ -224,13 +226,14 @@ end
 ---add a method to a custom class
 ---@param class string | Class class created with newClass()
 ---@param selector string | SEL name of method
----@types string Objective-C type encoded method arguments and return type
----@func function lua callback function for method implementation
+---@param types string Objective-C type encoded method arguments and return type
+---@param func function lua callback function for method implementation
+---@return cdata ffi callback
 local function addMethod(class, selector, types, func)
 	assert(type(func) == "function")
-	assert(type(types) == "string")
-	local class = cls(class)
-	local selector = sel(selector)
+	assert(type(types) == "string") -- and #types - 1 == debug.getinfo(func).nparams)
+	local class = cls(class) ---@diagnostic disable-line: redefined-local
+	local selector = sel(selector) ---@diagnostic disable-line: redefined-local
 	local signature = {}
 	table.insert(signature, type_encoding[types:sub(1, 1)]) -- return type
 	table.insert(signature, "(*)(") -- anonymous function
@@ -241,10 +244,10 @@ local function addMethod(class, selector, types, func)
 	end
 
 	table.insert(signature, ")")
-	local signature = table.concat(signature)
-	-- print(class, selector, signature, types)
+	local signature = table.concat(signature) ---@diagnostic disable-line: redefined-local
 	local imp = ffi.cast("IMP", ffi.cast(signature, func))
 	assert(C.class_addMethod(class, selector, imp, types) == 1)
+	return imp
 end
 
 local objc = setmetatable(
@@ -259,8 +262,7 @@ local objc = setmetatable(
 	},
 	{
 		__index = function(_, name)
-			-- use key to lookup class by name
-			return cls(name)
+			return cls(name) -- use key to lookup class by name
 		end,
 	}
 )
