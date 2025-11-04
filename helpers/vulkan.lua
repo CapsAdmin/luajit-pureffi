@@ -56,12 +56,13 @@ do -- instance
 		Surface.__index = Surface
 
 		function Instance:CreateMetalSurface(metal_layer)
+			assert(metal_layer ~= nil, "metal_layer cannot be nil")
 			local surfaceCreateInfo = vk.VkMetalSurfaceCreateInfoEXT(
 				{
 					sType = "VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT",
 					pNext = nil,
 					flags = 0,
-					pLayer = ffi.cast("const void*", metal_layer, "failed to get metal layer"),
+					pLayer = ffi.cast("const void*", metal_layer),
 				}
 			)
 			local ptr = vk.Box(vk.VkSurfaceKHR)()
