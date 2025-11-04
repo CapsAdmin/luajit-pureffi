@@ -217,6 +217,50 @@ do -- instance
 			Device.__index = Device
 
 			function PhysicalDevice:CreateDevice(extensions, graphicsQueueFamily)
+				-- Check if VK_KHR_portability_subset is supported and add it if needed
+				local extensionCount = ffi.new("uint32_t[1]", 0)
+				lib.vkEnumerateDeviceExtensionProperties(self.ptr, nil, extensionCount, nil)
+				local availableExtensions = vk.Array(vk.VkExtensionProperties)(extensionCount[0])
+				lib.vkEnumerateDeviceExtensionProperties(self.ptr, nil, extensionCount, availableExtensions)
+
+				local hasPortabilitySubset = false
+				for i = 0, extensionCount[0] - 1 do
+					local extName = ffi.string(availableExtensions[i].extensionName)
+					if extName == "VK_KHR_portability_subset" then
+						hasPortabilitySubset = true
+						break
+					end
+				end
+
+				-- Add portability subset and its dependency if supported
+				local finalExtensions = {}
+				for i, ext in ipairs(extensions) do
+					finalExtensions[i] = ext
+				end
+				if hasPortabilitySubset then
+					-- VK_KHR_portability_subset requires VK_KHR_get_physical_device_properties2
+					-- but this extension is promoted to core in Vulkan 1.1, so it's likely already available
+					table.insert(finalExtensions, "VK_KHR_portability_subset")
+					-- Only add the dependency if not already present
+					local hasGetProps2 = false
+					for _, ext in ipairs(finalExtensions) do
+						if ext == "VK_KHR_get_physical_device_properties2" then
+							hasGetProps2 = true
+							break
+						end
+					end
+					if not hasGetProps2 then
+						-- Check if this extension is available
+						for i = 0, extensionCount[0] - 1 do
+							local extName = ffi.string(availableExtensions[i].extensionName)
+							if extName == "VK_KHR_get_physical_device_properties2" then
+								table.insert(finalExtensions, "VK_KHR_get_physical_device_properties2")
+								break
+							end
+						end
+					end
+				end
+
 				local queuePriority = ffi.new("float[1]", 1.0)
 				local queueCreateInfo = vk.Box(
 					vk.VkDeviceQueueCreateInfo,
@@ -227,14 +271,14 @@ do -- instance
 						pQueuePriorities = queuePriority,
 					}
 				)
-				local deviceExtensions = vk.Array(ffi.typeof("const char*"), #extensions, extensions)
+				local deviceExtensions = vk.Array(ffi.typeof("const char*"), #finalExtensions, finalExtensions)
 				local deviceCreateInfo = vk.Box(
 					vk.VkDeviceCreateInfo,
 					{
 						sType = "VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO",
 						queueCreateInfoCount = 1,
 						pQueueCreateInfos = queueCreateInfo,
-						enabledExtensionCount = #extensions,
+						enabledExtensionCount = #finalExtensions,
 						ppEnabledExtensionNames = deviceExtensions,
 					}
 				)
@@ -397,6 +441,7 @@ do -- instance
 
 				function Swapchain:GetNextImage(imageAvailableSemaphore)
 					local imageIndex = ffi.new("uint32_t[1]", 0)
+					
 					local result = lib.vkAcquireNextImageKHR(
 						self.device.ptr[0],
 						self.ptr[0],
@@ -406,11 +451,9 @@ do -- instance
 						imageIndex
 					)
 
-					-- VK_ERROR_OUT_OF_DATE_KHR = -1000001004
-					-- VK_SUBOPTIMAL_KHR = 1000001003
-					if result == -1000001004 then
+					if result == vk.VkResult("VK_ERROR_OUT_OF_DATE_KHR") then
 						return nil, "out_of_date"
-					elseif result == 1000001003 then
+					elseif result == vk.VkResult("VK_SUBOPTIMAL_KHR") then
 						return imageIndex, "suboptimal"
 					elseif result ~= 0 then
 						error("failed to acquire next image: " .. vk.EnumToString(result))

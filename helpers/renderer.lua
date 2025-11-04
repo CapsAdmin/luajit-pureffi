@@ -87,10 +87,15 @@ function Renderer:Initialize(metal_surface)
 	self.swapchain_image_count = imageCount[0]
 	-- Create command buffer
 	self.command_buffer = self.command_pool:CreateCommandBuffer()
-	-- Create synchronization objects
-	self.image_available_semaphore = self.device:CreateSemaphore()
-	self.render_finished_semaphore = self.device:CreateSemaphore()
-	self.in_flight_fence = self.device:CreateFence()
+	-- Create synchronization objects (one set per swapchain image)
+	self.image_available_semaphores = {}
+	self.render_finished_semaphores = {}
+	self.in_flight_fences = {}
+	for i = 1, self.swapchain_image_count do
+		self.image_available_semaphores[i] = self.device:CreateSemaphore()
+		self.render_finished_semaphores[i] = self.device:CreateSemaphore()
+		self.in_flight_fences[i] = self.device:CreateFence()
+	end
 	-- Get queue
 	self.queue = self.device:GetQueue(self.graphics_queue_family)
 
@@ -98,6 +103,7 @@ function Renderer:Initialize(metal_surface)
 	self.render_pass = nil
 	self.image_views = {}
 	self.framebuffers = {}
+	self.current_frame = 0
 
 	return self
 end
@@ -207,16 +213,20 @@ function Renderer:PrintCapabilities()
 end
 
 function Renderer:BeginFrame(use_render_pass)
-	-- Wait for previous frame
-	self.in_flight_fence:Wait()
-	-- Acquire next image
-	self.image_index, self.acquire_status = self.swapchain:GetNextImage(self.image_available_semaphore)
+	-- Use round-robin frame index
+	self.current_frame = (self.current_frame % self.swapchain_image_count) + 1
+
+	-- Acquire next image (before waiting on fence, so we know which image to wait for)
+	self.image_index, self.acquire_status = self.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
 
 	-- Check if swapchain needs recreation
 	if self.acquire_status == "out_of_date" or self.image_index == nil then
 		self:RecreateSwapchain()
 		return nil, nil, nil, "out_of_date"
 	end
+
+	-- Wait for the fence for this frame (ensures previous use of this image is complete)
+	self.in_flight_fences[self.current_frame]:Wait()
 
 	-- Reset and begin command buffer
 	self.command_buffer:Reset()
@@ -240,15 +250,15 @@ function Renderer:EndFrame(use_render_pass)
 	end
 
 	self.command_buffer:End()
-	-- Submit command buffer
+	-- Submit command buffer with current frame's semaphores
 	self.queue:Submit(
 		self.command_buffer,
-		self.image_available_semaphore,
-		self.render_finished_semaphore,
-		self.in_flight_fence
+		self.image_available_semaphores[self.current_frame],
+		self.render_finished_semaphores[self.current_frame],
+		self.in_flight_fences[self.current_frame]
 	)
 	-- Present
-	local present_status = self.swapchain:Present(self.render_finished_semaphore, self.queue, self.image_index)
+	local present_status = self.swapchain:Present(self.render_finished_semaphores[self.current_frame], self.queue, self.image_index)
 
 	-- Recreate swapchain if needed
 	if present_status == "out_of_date" or present_status == "suboptimal" then
@@ -288,7 +298,21 @@ function Renderer:RecreateSwapchain()
 	-- Update image count
 	local imageCount = ffi.new("uint32_t[1]", 0)
 	lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.swapchain.ptr[0], imageCount, nil)
+	local old_count = self.swapchain_image_count
 	self.swapchain_image_count = imageCount[0]
+
+	-- Recreate synchronization objects if count changed
+	if old_count ~= self.swapchain_image_count then
+		self.image_available_semaphores = {}
+		self.render_finished_semaphores = {}
+		self.in_flight_fences = {}
+		for i = 1, self.swapchain_image_count do
+			self.image_available_semaphores[i] = self.device:CreateSemaphore()
+			self.render_finished_semaphores[i] = self.device:CreateSemaphore()
+			self.in_flight_fences[i] = self.device:CreateFence()
+		end
+		self.current_frame = 0
+	end
 
 	-- Recreate image views if they were created before
 	if self.render_pass then
