@@ -68,21 +68,22 @@ local mod = {}
 	end
 
 	do
-		local t_cache = {}
+		-- seem to collide
+		local fixed_len_cache = {}
+		local var_len_cache = {}
 
 		local function array_type(t, len)
+			local key = tonumber(t)
 			if len then
-				t_cache[t] = t_cache[t] or ffi.typeof("$[" .. len .. "]", t)
-				return t_cache[t]
+				fixed_len_cache[key] = fixed_len_cache[key] or ffi.typeof("$[" .. len .. "]", t)
+				return fixed_len_cache[key]
 			end
-
-			t_cache[t] = t_cache[t] or ffi.typeof("$[?]", t)
-			return t_cache[t]
+			var_len_cache[key] = var_len_cache[key] or ffi.typeof("$[?]", t)
+			return var_len_cache[key]
 		end
 
 		function mod.Array(t, len, ctor)
 			if ctor then return array_type(t, len)(ctor) end
-
 			return array_type(t, len)
 		end
 
