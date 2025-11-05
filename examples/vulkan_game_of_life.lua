@@ -146,7 +146,6 @@ void main() {
 	outColor = vec4(color, 1.0);
 }
 ]]
-local graphics_pipeline
 
 -- Random initialization helper
 local function initialize_random_state()
@@ -218,7 +217,6 @@ do
 				"device_local"
 			)
 			renderer:UploadToImage(image, data, pixel_count, w, h)
-
 			self.storage_images[i] = image
 			self.storage_image_views[i] = image:CreateView()
 		end
@@ -281,68 +279,66 @@ local compute_pipeline = renderer:CreateComputePipeline(
 		},
 	}
 )
-local graphics_uniform_buffer = renderer:CreateBuffer(
-	{
-		byte_size = ffi.sizeof(UniformData),
-		buffer_usage = "uniform_buffer",
-		data = ffi.new(UniformData, {0.0, 0.0, 0.0, 1.0}),
-	}
-)
+
+local graphics_pipeline
 
 function renderer:OnRecreateSwapchain()
-	local extent = self:GetExtent()
-	local w = tonumber(extent.width)
-	local h = tonumber(extent.height)
 	compute_pipeline:Update(initialize_random_state())
-	-- Recreate pipeline to update viewport/scissor
-	graphics_pipeline = self:CreatePipeline(
-		{
-			viewport = {x = 0.0, y = 0.0, w = w, h = h, min_depth = 0.0, max_depth = 1.0},
-			scissor = {x = 0, y = 0, w = w, h = h},
-			input_assembly = {topology = "triangle_list", primitive_restart = false},
-			vertex_bindings = {},
-			vertex_attributes = {},
-			vertex_buffers = {},
-			uniform_buffers = {},
-			storage_images = {
-				{stage = "fragment", image_view = compute_pipeline.storage_image_views[1]},
-			},
-			uniform_buffers_graphics = {
-				{stage = "fragment", buffer = graphics_uniform_buffer},
-			},
-			shader_stages = {
-				{type = "vertex", code = VERTEX_SHADER},
-				{type = "fragment", code = FRAGMENT_SHADER},
-			},
-			rasterizer = {
-				depth_clamp = false,
-				discard = false,
-				polygon_mode = "fill",
-				line_width = 1.0,
-				cull_mode = "none",
-				front_face = "counter_clockwise",
-				depth_bias = 0,
-			},
-			color_blend = {
-				logic_op_enabled = false,
-				logic_op = "copy",
-				constants = {0.0, 0.0, 0.0, 0.0},
-				attachments = {{blend = false, color_write_mask = {"r", "g", "b", "a"}}},
-			},
-			multisampling = {sample_shading = false, rasterization_samples = "1"},
-			depth_stencil = {
-				depth_test = false,
-				depth_write = false,
-				depth_compare_op = "less",
-				depth_bounds_test = false,
-				stencil_test = false,
-			},
-		}
-	)
+	if graphics_pipeline then
+		graphics_pipeline:UpdateDescriptorSet(1, 0 , "storage_image", compute_pipeline.storage_image_views[1])
+	end
 end
 
--- Initialize
 renderer:OnRecreateSwapchain()
+
+graphics_pipeline = renderer:CreatePipeline(
+	{
+		dynamic_states = {"viewport", "scissor"},
+		input_assembly = {topology = "triangle_list", primitive_restart = false},
+		storage_images = {
+			{stage = "fragment", image_view = compute_pipeline.storage_image_views[1]},
+		},
+		uniform_buffers = {
+			{
+				stage = "fragment",
+				buffer = renderer:CreateBuffer(
+					{
+						byte_size = ffi.sizeof(UniformData),
+						buffer_usage = "uniform_buffer",
+						data = UniformData({0.0, 0.0, 0.0, 1.0}),
+					}
+				),
+			},
+		},
+		shader_stages = {
+			{type = "vertex", code = VERTEX_SHADER},
+			{type = "fragment", code = FRAGMENT_SHADER},
+		},
+		rasterizer = {
+			depth_clamp = false,
+			discard = false,
+			polygon_mode = "fill",
+			line_width = 1.0,
+			cull_mode = "none",
+			front_face = "counter_clockwise",
+			depth_bias = 0,
+		},
+		color_blend = {
+			logic_op_enabled = false,
+			logic_op = "copy",
+			constants = {0.0, 0.0, 0.0, 0.0},
+			attachments = {{blend = false, color_write_mask = {"r", "g", "b", "a"}}},
+		},
+		multisampling = {sample_shading = false, rasterization_samples = "1"},
+		depth_stencil = {
+			depth_test = false,
+			depth_write = false,
+			depth_compare_op = "less",
+			depth_bounds_test = false,
+			stencil_test = false,
+		},
+	}
+)
 wnd:Initialize()
 wnd:OpenWindow()
 -- Simulation state
@@ -379,24 +375,24 @@ while true do
 		local cmd = renderer:GetCommandBuffer()
 
 		-- Run compute shader (only if not paused)
-		if not paused then 
-			compute_pipeline:Bind(cmd)
-		end
+		if not paused then compute_pipeline:Bind(cmd) end
 
 		-- Update uniform buffer
 		time = time + 0.016
-		local ubo = UniformData({
+		graphics_pipeline:UpdateUniformBuffer(1, UniformData({
 			time,
 			(
 				time * 0.1
 			) % 1.0,
 			0.0,
 			1.2,
-		})
-		graphics_uniform_buffer:CopyData(ubo, ffi.sizeof(UniformData))
+		}))
 		-- Render fullscreen quad
 		cmd = renderer:BeginRenderPass(ffi.new("float[4]", {0.0, 0.0, 0.0, 1.0}))
 		graphics_pipeline:Bind(cmd)
+		local extent = renderer:GetExtent()
+		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
+		cmd:SetScissor(0, 0, extent.width, extent.height)
 		cmd:Draw(6, 1, 0, 0)
 		cmd:EndRenderPass()
 		renderer:EndFrame()

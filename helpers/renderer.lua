@@ -3,7 +3,7 @@ local setmetatable = require("helpers.setmetatable_gc")
 local vulkan = require("helpers.vulkan")
 local Renderer = {}
 Renderer.__index = Renderer
-
+table.print = require("helpers.table_print").print
 -- Default configuration
 local default_config = {
 	-- Swapchain settings
@@ -260,20 +260,6 @@ do
 		local self = setmetatable({}, Pipeline)
 		local uniform_buffers = {}
 
-		-- Handle legacy uniform_buffers config
-		if config.uniform_buffers then
-			for i, uniform_config in ipairs(config.uniform_buffers) do
-				uniform_buffers[i] = renderer:CreateBuffer(
-					{
-						byte_size = uniform_config.byte_size,
-						data = uniform_config.initial_data,
-						data_type = uniform_config.data_type,
-						buffer_usage = "uniform_buffer",
-					}
-				)
-			end
-		end
-
 		local renderPass = renderer:CreateRenderPass()
 		renderer:CreateImageViews()
 		renderer:CreateFramebuffers()
@@ -296,8 +282,8 @@ do
 		end
 
 		-- Add uniform buffers to layout
-		if config.uniform_buffers_graphics then
-			for i, ub_config in ipairs(config.uniform_buffers_graphics) do
+		if config.uniform_buffers then
+			for i, ub_config in ipairs(config.uniform_buffers) do
 				layout[binding_index + 1] = {
 					binding = binding_index,
 					type = "uniform_buffer",
@@ -306,18 +292,7 @@ do
 				}
 				binding_index = binding_index + 1
 			end
-			table.insert(pool_sizes, {type = "uniform_buffer", count = #config.uniform_buffers_graphics})
-		elseif config.uniform_buffers then
-			for i, ub in ipairs(uniform_buffers) do
-				layout[binding_index + 1] = {
-					binding = binding_index,
-					type = "uniform_buffer",
-					stageFlags = config.uniform_buffers[i].stage,
-					count = 1,
-				}
-				binding_index = binding_index + 1
-			end
-			table.insert(pool_sizes, {type = "uniform_buffer", count = #uniform_buffers})
+			table.insert(pool_sizes, {type = "uniform_buffer", count = #config.uniform_buffers})
 		end
 
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
@@ -342,14 +317,9 @@ do
 		end
 
 		-- Bind uniform buffers
-		if config.uniform_buffers_graphics then
-			for i, ub_config in ipairs(config.uniform_buffers_graphics) do
+		if config.uniform_buffers then
+			for i, ub_config in ipairs(config.uniform_buffers) do
 				renderer.device:UpdateDescriptorSet(descriptorSet, binding_index, ub_config.buffer)
-				binding_index = binding_index + 1
-			end
-		elseif config.uniform_buffers then
-			for i, ub in ipairs(uniform_buffers) do
-				renderer.device:UpdateDescriptorSet(descriptorSet, binding_index, ub)
 				binding_index = binding_index + 1
 			end
 		end
@@ -384,11 +354,20 @@ do
 		self.pipeline_layout = pipelineLayout
 		self.renderer = renderer
 		self.config = config
-		self.uniform_buffers = uniform_buffers
+		self.uniform_buffers = config.uniform_buffers
 		self.descriptorSetLayout = descriptorSetLayout
 		self.descriptorPool = descriptorPool
 
 		return self
+	end
+
+	function Pipeline:UpdateDescriptorSet(index, binding_index, type, obj)
+		self.renderer.device:UpdateDescriptorSet(
+			self.descriptor_sets[index],
+			binding_index,
+			obj,
+			"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
+		)
 	end
 
 	function Pipeline:UpdateUniformBuffer(index, data)
@@ -396,7 +375,7 @@ do
 			error("Invalid uniform buffer index: " .. index)
 		end
 
-		local ub = self.uniform_buffers[index]
+		local ub = self.uniform_buffers[index].buffer
 		ub:CopyData(data, ub.byte_size)
 	end
 

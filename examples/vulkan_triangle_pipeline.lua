@@ -43,25 +43,8 @@ local vertex_buffer = renderer:CreateBuffer(
 	}
 )
 -- Create pipeline once at startup with dynamic viewport/scissor
-local extent = renderer:GetExtent()
 local pipeline = renderer:CreatePipeline(
 	{
-		-- Initial viewport/scissor (can be ignored since we're using dynamic state)
-		viewport = {
-			x = 0.0,
-			y = 0.0,
-			w = extent.width,
-			h = extent.height,
-			min_depth = 0.0,
-			max_depth = 1.0,
-		},
-		scissor = {
-			x = 0,
-			y = 0,
-			w = extent.width,
-			h = extent.height,
-		},
-		-- Enable dynamic viewport and scissor
 		dynamic_states = {"viewport", "scissor"},
 		input_assembly = {
 			topology = "triangle_list",
@@ -92,11 +75,23 @@ local pipeline = renderer:CreatePipeline(
 		uniform_buffers = {
 			{
 				stage = "fragment",
-				initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
+				buffer = renderer:CreateBuffer(
+					{
+						byte_size = ffi.sizeof(RGBA),
+						buffer_usage = "uniform_buffer",
+						data = RGBA(1.0, 1.0, 1.0, 1.0),
+					}
+				),
 			},
 			{
 				stage = "fragment",
-				initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
+				buffer = renderer:CreateBuffer(
+					{
+						byte_size = ffi.sizeof(RGBA),
+						buffer_usage = "uniform_buffer",
+						data = RGBA(1.0, 1.0, 1.0, 1.0),
+					}
+				),
 			},
 		},
 		shader_stages = {
@@ -216,7 +211,6 @@ while true do
 		local cmd = renderer:BeginRenderPass(RGBA(0.2, 0.2, 0.2, 1.0))
 		pipeline:UpdateUniformBuffer(1, RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
 		pipeline:Bind(cmd)
-		-- Set dynamic viewport and scissor based on current extent
 		local extent = renderer:GetExtent()
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
 		cmd:SetScissor(0, 0, extent.width, extent.height)
