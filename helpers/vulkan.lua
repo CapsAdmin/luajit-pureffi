@@ -42,6 +42,7 @@ local enums = translate_enums(
 		{vk.VkImageAspectFlagBits, "VK_IMAGE_ASPECT_", "_BIT"},
 		{vk.VkAccessFlagBits, "VK_ACCESS_", "_BIT"},
 		{vk.VkImageLayout, "VK_IMAGE_LAYOUT_"},
+		{vk.VkPipelineBindPoint, "VK_PIPELINE_BIND_POINT_"},
 	}
 )
 
@@ -785,10 +786,10 @@ do -- instance
 						lib.vkCmdEndRenderPass(self.ptr[0])
 					end
 
-					function CommandBuffer:BindPipeline(pipeline)
+					function CommandBuffer:BindPipeline(pipeline, type)
 						lib.vkCmdBindPipeline(
 							self.ptr[0],
-							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_GRAPHICS"),
+							enums.VK_PIPELINE_BIND_POINT_(type),
 							pipeline.ptr[0]
 						)
 					end
@@ -814,7 +815,7 @@ do -- instance
 						)
 					end
 
-					function CommandBuffer:BindDescriptorSets(pipelineLayout, descriptorSets, firstSet)
+					function CommandBuffer:BindDescriptorSets(type, pipelineLayout, descriptorSets, firstSet)
 						-- descriptorSets is an array of descriptor set objects
 						local setCount = #descriptorSets
 						local setArray = vk.Array(vk.VkDescriptorSet)(setCount)
@@ -825,7 +826,7 @@ do -- instance
 
 						lib.vkCmdBindDescriptorSets(
 							self.ptr[0],
-							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_GRAPHICS"),
+							enums.VK_PIPELINE_BIND_POINT_(type),
 							pipelineLayout.ptr[0],
 							firstSet or 0,
 							setCount,
@@ -868,34 +869,6 @@ do -- instance
 						)
 					end
 
-					function CommandBuffer:BindComputePipeline(pipeline)
-						lib.vkCmdBindPipeline(
-							self.ptr[0],
-							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_COMPUTE"),
-							pipeline.ptr[0]
-						)
-					end
-
-					function CommandBuffer:BindComputeDescriptorSets(pipelineLayout, descriptorSets, firstSet)
-						local setCount = #descriptorSets
-						local setArray = vk.Array(vk.VkDescriptorSet)(setCount)
-
-						for i, ds in ipairs(descriptorSets) do
-							setArray[i - 1] = ds.ptr[0]
-						end
-
-						lib.vkCmdBindDescriptorSets(
-							self.ptr[0],
-							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_COMPUTE"),
-							pipelineLayout.ptr[0],
-							firstSet or 0,
-							setCount,
-							setArray,
-							0,
-							nil
-						)
-					end
-
 					function CommandBuffer:Dispatch(groupCountX, groupCountY, groupCountZ)
 						lib.vkCmdDispatch(
 							self.ptr[0],
@@ -928,8 +901,8 @@ do -- instance
 							for i, barrier in ipairs(config.imageBarriers) do
 								imageBarriers[i - 1] = vk.VkImageMemoryBarrier({
 									sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
-									srcAccessMask = barrier.srcAccessMask or 0,
-									dstAccessMask = barrier.dstAccessMask or 0,
+									srcAccessMask = vulkan.enums.VK_ACCESS_(barrier.srcAccessMask or "none"),
+									dstAccessMask = vulkan.enums.VK_ACCESS_(barrier.dstAccessMask or "none"),
 									oldLayout = enums.VK_IMAGE_LAYOUT_(barrier.oldLayout or "undefined"),
 									newLayout = enums.VK_IMAGE_LAYOUT_(barrier.newLayout or "general"),
 									srcQueueFamilyIndex = 0xFFFFFFFF,

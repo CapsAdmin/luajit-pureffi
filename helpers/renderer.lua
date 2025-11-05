@@ -418,8 +418,8 @@ do
 
 	function Pipeline:Bind(cmd)
 		local cmd = self.renderer:GetCommandBuffer()
-		cmd:BindPipeline(self.pipeline)
-		cmd:BindDescriptorSets(self.pipeline_layout, self.descriptor_sets, 0)
+		cmd:BindPipeline(self.pipeline, "graphics")
+		cmd:BindDescriptorSets("graphics", self.pipeline_layout, self.descriptor_sets, 0)
 	end
 end
 
@@ -446,5 +446,55 @@ function Renderer:CreateBuffer(config)
 
 	return buffer
 end
+
+
+	function Renderer:UploadToImage(image, data, pixel_count, width, height)
+		-- Create staging buffer
+		local staging_buffer = self.device:CreateBuffer(pixel_count * 4, "transfer_src", {"host_visible", "host_coherent"})
+		staging_buffer:CopyData(data, pixel_count * 4)
+		-- Copy to image using command buffer
+		local cmd_pool = self.device:CreateCommandPool(self.graphics_queue_family)
+		local cmd = cmd_pool:CreateCommandBuffer()
+		cmd:Begin()
+		-- Transition image to transfer dst
+		cmd:PipelineBarrier(
+			{
+				srcStage = "compute",
+				dstStage = "transfer",
+				imageBarriers = {
+					{
+						image = image.ptr[0],
+						srcAccessMask = "none",
+						dstAccessMask = "transfer_write",
+						oldLayout = "undefined",
+						newLayout = "transfer_dst_optimal",
+					},
+				},
+			}
+		)
+		-- Copy buffer to image
+		cmd:CopyBufferToImage(staging_buffer, image, width, height)
+		-- Transition to general layout for compute
+		cmd:PipelineBarrier(
+			{
+				srcStage = "transfer",
+				dstStage = "compute",
+				imageBarriers = {
+					{
+						image = image.ptr[0],
+						srcAccessMask = "transfer_write",
+						dstAccessMask = "shader_read",
+						oldLayout = "transfer_dst_optimal",
+						newLayout = "general",
+					},
+				},
+			}
+		)
+		cmd:End()
+		-- Submit and wait
+		local fence = self.device:CreateFence()
+		self.queue:SubmitAndWait(self.device, cmd, fence)
+	end
+
 
 return Renderer
