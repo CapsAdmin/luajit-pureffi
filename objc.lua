@@ -1,5 +1,5 @@
 local ffi = require("ffi")
-local C = ffi.C
+local C = ffi.load("/usr/lib/libobjc.A.dylib")
 ---@alias cdata  userdata C types returned from FFI
 ---@alias id     cdata    Objective-C object
 ---@alias Class  cdata    Objective-C Class
@@ -40,7 +40,6 @@ void free(void *ptr);
 void objc_msgSend(void);
 void objc_registerClassPair(Class cls);
 ]])
-assert(ffi.load("/usr/lib/libobjc.A.dylib", true))
 local type_encoding = setmetatable(
 	{
 		["c"] = "char",
@@ -80,7 +79,7 @@ local type_encoding = setmetatable(
 )
 
 local function table_pack(...)
-	return { n = select("#", ...), ... }
+	return {n = select("#", ...), ...}
 end
 
 ---convert a NULL pointer to nil
@@ -96,12 +95,14 @@ end
 local function cls(name)
 	assert(name)
 
-	if ffi.istype("id", name) then
-		return assert(ptr(C.object_getClass(name))) -- get class from object
-	end
+	if type(name) == "cdata" then
+		-- get class from object
+		if ffi.istype("id", name) then
+			return assert(ptr(C.object_getClass(name)))
+		end
 
-	if type(name) == "cdata" and ffi.istype("Class", name) then
-		return name -- already a Class
+		-- already a Class
+		if ffi.istype("Class", name) then return name end
 	end
 
 	assert(type(name) == "string")
@@ -134,82 +135,91 @@ end
 -- Cache for casted function pointers to avoid table overflow
 local msgSend_cache = {}
 
+---return Method for Class or object and SEL
+---@param self Class | id
+---@param selector SEL
+---@return Method?
+local function getMethod(self, selector) ---@diagnostic disable-line: redefined-local
+	if ffi.istype("Class", self) then
+		return assert(ptr(C.class_getClassMethod(self, selector)))
+	elseif ffi.istype("id", self) then
+		return assert(ptr(C.class_getInstanceMethod(cls(self), selector)))
+	end
+
+	assert(false, "self not a Class or object")
+end
+
+---convert a Lua variable to a C type if needed
+---@param lua_var any
+---@param c_type string
+---@return cdata | any
+local function convert(lua_var, c_type)
+	if type(lua_var) == "string" then
+		if c_type == "SEL" then
+			return sel(lua_var)
+		elseif c_type == "char*" then
+			return ffi.cast(c_type, lua_var)
+		end
+	elseif type(lua_var) == "cdata" and c_type == "id" and ffi.istype("Class", lua_var) then
+		return ffi.cast(c_type, lua_var) -- sometimes method signatures use id instead of Class
+	elseif lua_var == nil then
+		return ffi.new(c_type) -- convert to a null pointer
+	end
+
+	return lua_var -- no conversion necessary
+end
+
+local function getReturnType(method)
+	local char_ptr = assert(ptr(C.method_copyReturnType(method)))
+	local objc_type = ffi.string(char_ptr)
+	C.free(char_ptr)
+	return assert(type_encoding[objc_type])
+end
+
+local function getArgumentTypes(method)
+	local types = {}
+	local num_args = C.method_getNumberOfArguments(method)
+
+	for i = 0, num_args - 1 do
+		local char_ptr = assert(ptr(C.method_copyArgumentType(method, i)))
+		local objc_type = ffi.string(char_ptr)
+		C.free(char_ptr)
+		types[i + 1] = assert(type_encoding[objc_type])
+	end
+
+	return types
+end
+
 ---call a method for a SEL on a Class or object
 ---@param self string | Class | id the class or object
 ---@param selector string | SEL name of method
 ---@param ...? any additional method parameters
 ---@return any
 local function msgSend(self, selector, ...)
-	---return Method for Class or object and SEL
-	---@param self Class | id
-	---@param selector SEL
-	---@return Method?
-	local function getMethod(self, selector) ---@diagnostic disable-line: redefined-local
-		if ffi.istype("Class", self) then
-			return assert(ptr(C.class_getClassMethod(self, selector)))
-		elseif ffi.istype("id", self) then
-			return assert(ptr(C.class_getInstanceMethod(cls(self), selector)))
-		end
-
-		assert(false, "self not a Class or object")
-	end
-
-	---convert a Lua variable to a C type if needed
-	---@param lua_var any
-	---@param c_type string
-	---@return cdata | any
-	local function convert(lua_var, c_type)
-		if type(lua_var) == "string" then
-			if c_type == "SEL" then
-				return sel(lua_var)
-			elseif c_type == "char*" then
-				return ffi.cast(c_type, lua_var)
-			end
-		elseif type(lua_var) == "cdata" and c_type == "id" and ffi.istype("Class", lua_var) then
-			return ffi.cast(c_type, lua_var) -- sometimes method signatures use id instead of Class
-		elseif lua_var == nil then
-			return ffi.new(c_type) -- convert to a null pointer
-		end
-
-		return lua_var -- no conversion necessary
-	end
-
 	if type(self) == "string" then self = cls(self) end
 
 	local selector = sel(selector) ---@diagnostic disable-line: redefined-local
 	local method = getMethod(self, selector)
-	local call_args = table_pack(self, selector, ...)
-	local char_ptr = assert(ptr(C.method_copyReturnType(method)))
-	local objc_type = ffi.string(char_ptr)
-	C.free(char_ptr)
-	local c_type = assert(type_encoding[objc_type])
-	local signature = {}
-	table.insert(signature, c_type)
-	table.insert(signature, "(*)(")
-	local num_method_args = C.method_getNumberOfArguments(method)
-	assert(num_method_args == call_args.n)
 
-	for i = 1, num_method_args do
-		char_ptr = assert(ptr(C.method_copyArgumentType(method, i - 1)))
-		objc_type = ffi.string(char_ptr)
-		C.free(char_ptr)
-		c_type = assert(type_encoding[objc_type])
-		table.insert(signature, c_type)
-		call_args[i] = convert(call_args[i], c_type)
+	local args = getArgumentTypes(method)
+	local ret = getReturnType(method)
+	local signature = string.format("%s(*)(%s)", ret, table.concat(args, ", "))
+	local func = msgSend_cache[signature]
 
-		if i < num_method_args then table.insert(signature, ",") end
-	end
-
-	table.insert(signature, ")")
-	local signature_str = table.concat(signature)
-
-	local func = msgSend_cache[signature_str]
 	if not func then
-		func = ffi.cast(signature_str, C.objc_msgSend)
-		msgSend_cache[signature_str] = func
+		func = ffi.cast(signature, C.objc_msgSend)
+		msgSend_cache[signature] = func
 	end
 
-	return ptr(func(unpack(call_args, 1, call_args.n)))
+	local call_args = table_pack(self, selector, ...)
+
+	assert(#args == call_args.n, "argument count mismatch")
+	for i, arg in ipairs(args) do
+		call_args[i] = convert(call_args[i], arg)
+	end
+
+	local ret = func(unpack(call_args, 1, call_args.n))
+	return ptr(ret)
 end
 
 ---load a Framework
