@@ -1,11 +1,8 @@
 local ffi = require("ffi")
-local vulkan = require("helpers.vulkan")
 local cocoa = require("cocoa")
 local threads = require("threads")
 local Renderer = require("helpers.renderer")
 local wnd = cocoa.window()
-local vk = vulkan.vk
-local lib = vulkan.lib
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
@@ -15,7 +12,6 @@ local renderer = Renderer.New(
 		composite_alpha = "opaque",
 	}
 )
-renderer:PrintCapabilities()
 wnd:Initialize()
 wnd:OpenWindow()
 local frame = 0
@@ -56,26 +52,10 @@ while true do
 	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
-		local range = vk.Box(
-			vk.VkImageSubresourceRange,
-			{
-				aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-				baseMipLevel = 0,
-				levelCount = 1,
-				baseArrayLayer = 0,
-				layerCount = 1,
-			}
-		)
-		lib.vkCmdClearColorImage(
-			renderer:GetCommandBuffer().ptr[0],
-			renderer:GetSwapChainImage(),
-			"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
-			vk.Box(vk.VkClearColorValue, {
-				float32 = {hsv_to_rgb(frame % 1, 1, 1)},
-			}),
-			1,
-			range
-		)
+		renderer:GetCommandBuffer():ClearColorImage({
+			image = renderer:GetSwapChainImage(),
+			color = {hsv_to_rgb(frame % 1, 1, 1)},
+		})
 		renderer:EndFrame()
 	end
 

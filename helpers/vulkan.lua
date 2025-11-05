@@ -34,6 +34,12 @@ local enums = translate_enums(
 		{vk.VkPresentModeKHR, "VK_PRESENT_MODE_", "_KHR"},
 		{vk.VkCompositeAlphaFlagBitsKHR, "VK_COMPOSITE_ALPHA_", "_BIT_KHR"},
 		{vk.VkImageUsageFlagBits, "VK_IMAGE_USAGE_", "_BIT"},
+		{vk.VkBufferUsageFlagBits, "VK_BUFFER_USAGE_", "_BIT"},
+		{vk.VkMemoryPropertyFlagBits, "VK_MEMORY_PROPERTY_", "_BIT"},
+		{vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", "_BIT"},
+		{vk.VkDescriptorType, "VK_DESCRIPTOR_TYPE_"},
+		{vk.VkColorSpaceKHR, "VK_COLOR_SPACE_"},
+		{vk.VkImageAspectFlagBits, "VK_IMAGE_ASPECT_", "_BIT"},
 	}
 )
 
@@ -257,7 +263,10 @@ do -- instance
 			local result = {}
 
 			for i = 0, count - 1 do
-				result[i + 1] = formats[i]
+				result[i + 1] = {
+					format = enums.VK_FORMAT_.to_string(formats[i].format),
+					color_space = enums.VK_COLOR_SPACE_.to_string(formats[i].colorSpace),
+				}
 			end
 
 			return result
@@ -390,6 +399,10 @@ do -- instance
 				return setmetatable({ptr = ptr, physical_device = self}, Device)
 			end
 
+			function Device:WaitIdle()
+				lib.vkDeviceWaitIdle(self.ptr[0])
+			end
+
 			function Device:__gc()
 				lib.vkDestroyDevice(self.ptr[0], nil)
 			end
@@ -499,8 +512,8 @@ do -- instance
 							sType = "VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR",
 							surface = surface.ptr[0],
 							minImageCount = imageCount,
-							imageFormat = surfaceFormat.format,
-							imageColorSpace = surfaceFormat.colorSpace,
+							imageFormat = enums.VK_FORMAT_(surfaceFormat.format),
+							imageColorSpace = enums.VK_COLOR_SPACE_(surfaceFormat.color_space),
 							imageExtent = surfaceCapabilities[0].currentExtent,
 							imageArrayLayers = 1,
 							imageUsage = imageUsage,
@@ -810,6 +823,29 @@ do -- instance
 							firstInstance or 0
 						)
 					end
+
+					function CommandBuffer:ClearColorImage(config)
+						local range = vk.Box(
+							vk.VkImageSubresourceRange,
+							{
+								aspectMask = enums.VK_IMAGE_ASPECT_(config.aspect_mask or "color"),
+								baseMipLevel = config.base_mip_level or 0,
+								levelCount = config.level_count or 1,
+								baseArrayLayer = config.base_array_layer or 0,
+								layerCount = config.layer_count or 1,
+							}
+						)
+						lib.vkCmdClearColorImage(
+							self.ptr[0],
+							config.image,
+							"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+							vk.Box(vk.VkClearColorValue, {
+								float32 = config.color or {0.0, 0.0, 0.0, 1.0},
+							}),
+							1,
+							range
+						)
+					end
 				end
 			end
 
@@ -834,6 +870,8 @@ do -- instance
 				end
 
 				function Device:CreateBuffer(size, usage, properties)
+					usage = enums.VK_BUFFER_USAGE_(usage)
+					properties = enums.VK_MEMORY_PROPERTY_(properties or {"host_visible", "host_coherent"})
 					local bufferInfo = vk.Box(
 						vk.VkBufferCreateInfo,
 						{
@@ -907,9 +945,9 @@ do -- instance
 
 					for i, b in ipairs(bindings) do
 						bindingArray[i - 1].binding = b.binding or (i - 1)
-						bindingArray[i - 1].descriptorType = vk.VkDescriptorType(b.type)
+						bindingArray[i - 1].descriptorType = enums.VK_DESCRIPTOR_TYPE_(b.type)
 						bindingArray[i - 1].descriptorCount = b.count or 1
-						bindingArray[i - 1].stageFlags = b.stageFlags or vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT")
+						bindingArray[i - 1].stageFlags = enums.VK_SHADER_STAGE_(b.stageFlags)
 						bindingArray[i - 1].pImmutableSamplers = nil
 					end
 
@@ -943,7 +981,7 @@ do -- instance
 					local poolSizeArray = vk.Array(vk.VkDescriptorPoolSize)(#poolSizes)
 
 					for i, ps in ipairs(poolSizes) do
-						poolSizeArray[i - 1].type = vk.VkDescriptorType(ps.type or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER")
+						poolSizeArray[i - 1].type = enums.VK_DESCRIPTOR_TYPE_(ps.type)
 						poolSizeArray[i - 1].descriptorCount = ps.count or 1
 					end
 
@@ -1070,7 +1108,7 @@ do -- instance
 					local colorAttachment = vk.Box(
 						vk.VkAttachmentDescription,
 						{
-							format = surfaceFormat.format,
+							format = enums.VK_FORMAT_(surfaceFormat.format),
 							samples = "VK_SAMPLE_COUNT_1_BIT",
 							loadOp = "VK_ATTACHMENT_LOAD_OP_CLEAR",
 							storeOp = "VK_ATTACHMENT_STORE_OP_STORE",
@@ -1173,7 +1211,7 @@ do -- instance
 							sType = "VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO",
 							image = image,
 							viewType = "VK_IMAGE_VIEW_TYPE_2D",
-							format = format,
+							format = enums.VK_FORMAT_(format),
 							subresourceRange = {
 								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
 								baseMipLevel = 0,
@@ -1393,7 +1431,6 @@ do -- instance
 							blendConstants = config.color_blend.constants or {0.0, 0.0, 0.0, 0.0},
 						}
 					)
-
 					config.depth_stencil = config.depth_stencil or {}
 					local depthStencilState = vk.Box(
 						vk.VkPipelineDepthStencilStateCreateInfo,
@@ -1401,9 +1438,7 @@ do -- instance
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO",
 							depthTestEnable = config.depth_stencil.depth_test or 0,
 							depthWriteEnable = config.depth_stencil.depth_write or 0,
-							depthCompareOp = enums.VK_COMPARE_OP_(
-								config.depth_stencil.depth_compare_op or "less"
-							),
+							depthCompareOp = enums.VK_COMPARE_OP_(config.depth_stencil.depth_compare_op or "less"),
 							depthBoundsTestEnable = config.depth_stencil.depth_bounds_test or 0,
 							stencilTestEnable = config.depth_stencil.stencil_test or 0,
 						}

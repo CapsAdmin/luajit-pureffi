@@ -2,38 +2,16 @@ local ffi = require("ffi")
 local setmetatable = require("helpers.setmetatable_gc")
 local vulkan = require("helpers.vulkan")
 local vk = vulkan.vk
-local lib = vulkan.lib
 local Renderer = {}
 Renderer.__index = Renderer
-
-local enum_translator = require("helpers.enum_translator")
-
-local function translate_enums(enums)
-	local out = {}
-
-	for _, args in ipairs(enums) do
-		out[args[2]] = enum_translator(args[1], args[2], {unpack(args, 3)})
-	end
-
-	return out
-end
-
-
-local enums = translate_enums(
-	{
-		{vk.VkBufferUsageFlagBits, "VK_BUFFER_USAGE_", "_BIT"},
-		{vk.VkMemoryPropertyFlagBits, "VK_MEMORY_PROPERTY_", "_BIT"},
-		{vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", "_BIT"},
-	}
-)
 
 -- Default configuration
 local default_config = {
 	-- Swapchain settings
-	present_mode = "VK_PRESENT_MODE_FIFO_KHR", -- FIFO (vsync), IMMEDIATE (no vsync), MAILBOX (triple buffer)
+	present_mode = "fifo", -- FIFO (vsync), IMMEDIATE (no vsync), MAILBOX (triple buffer)
 	image_count = nil, -- nil = minImageCount + 1 (usually triple buffer)
 	surface_format_index = 1, -- Which format from available formats to use
-	composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR", -- OPAQUE, PRE_MULTIPLIED, POST_MULTIPLIED, INHERIT
+	composite_alpha = "opaque", -- OPAQUE, PRE_MULTIPLIED, POST_MULTIPLIED, INHERIT
 	clipped = true, -- Clip pixels obscured by other windows
 	image_usage = nil, -- nil = COLOR_ATTACHMENT | TRANSFER_DST, or provide custom flags
 	-- Image acquisition
@@ -102,8 +80,8 @@ function Renderer:RecreateSwapchain()
 
 	local selected_format = new_surface_formats[self.config.surface_format_index]
 
-	if selected_format.format == vk.VkFormat("VK_FORMAT_UNDEFINED") then
-		error("Selected surface format is VK_FORMAT_UNDEFINED")
+	if selected_format.format == "undefined" then
+		error("selected surface format is undefined!")
 	end
 
 	self.surface_formats = new_surface_formats
@@ -272,7 +250,7 @@ function Renderer:NeedsRecreation()
 end
 
 function Renderer:WaitForIdle()
-	lib.vkDeviceWaitIdle(self.device.ptr[0])
+	self.device:WaitIdle()
 end
 
 do
@@ -302,8 +280,8 @@ do
 		for i, ub in ipairs(uniform_buffers) do
 			layout[i] = {
 				binding = i - 1,
-				type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
-				stageFlags = enums.VK_SHADER_STAGE_(config.uniform_buffers[i].stage),
+				type = "uniform_buffer",
+				stageFlags = config.uniform_buffers[i].stage,
 				count = 1,
 			}
 		end
@@ -311,7 +289,7 @@ do
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
 		local descriptorPool = renderer.device:CreateDescriptorPool({{
-			type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+			type = "uniform_buffer",
 			count = #uniform_buffers,
 		}}, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
@@ -404,75 +382,13 @@ function Renderer:CreateBuffer(config)
 
 	local buffer = self.device:CreateBuffer(
 		byte_size,
-		enums.VK_BUFFER_USAGE_(config.buffer_usage),
-		enums.VK_MEMORY_PROPERTY_(config.memory_property or {"host_visible", "host_coherent"})
+		config.buffer_usage,
+		config.memory_property
 	)
 
 	if data then buffer:CopyData(data, byte_size) end
 
 	return buffer
-end
-
-function Renderer:CreateVertexBuffer(tbl)
-	return self:CreateBuffer({
-		data = tbl,
-		data_type = "float",
-		buffer_usage = "vertex_buffer",
-	})
-end
-
-function Renderer:PrintCapabilities()
-	print("Available surface formats (unique):")
-	local seen_formats = {}
-
-	for i, format in ipairs(self.surface_formats) do
-		local format_str = vk.EnumToString(format.format)
-		local colorspace_str = vk.EnumToString(format.colorSpace)
-		local key = format_str .. "|" .. colorspace_str
-
-		if not seen_formats[key] then
-			seen_formats[key] = true
-			print("  [" .. (i - 1) .. "] " .. format_str .. " / " .. colorspace_str)
-		end
-	end
-
-	print("\nAvailable present modes (unique):")
-	local present_modes = self.physical_device:GetPresentModes(self.surface)
-	local seen_present_modes = {}
-
-	for _, mode in ipairs(present_modes) do
-		local modeStr = vk.EnumToString(mode)
-
-		if not seen_present_modes[modeStr] then
-			seen_present_modes[modeStr] = true
-			print("  " .. modeStr)
-		end
-	end
-
-	print("\nSurface capabilities:")
-	print("  Min image count: " .. self.surface_capabilities[0].minImageCount)
-	print("  Max image count: " .. self.surface_capabilities[0].maxImageCount)
-	print(
-		"  Current extent: " .. self.surface_capabilities[0].currentExtent.width .. "x" .. self.surface_capabilities[0].currentExtent.height
-	)
-	print(
-		"  Current transform: " .. vk.EnumToString(self.surface_capabilities[0].currentTransform)
-	)
-	-- Decode composite alpha bitmask
-	print("  Supported composite alpha modes:")
-	local composite_alpha_flags = self.surface_capabilities[0].supportedCompositeAlpha
-	local alpha_modes = {
-		{bit = 0x1, name = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR"},
-		{bit = 0x2, name = "VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR"},
-		{bit = 0x4, name = "VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR"},
-		{bit = 0x8, name = "VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR"},
-	}
-
-	for _, mode in ipairs(alpha_modes) do
-		if bit.band(composite_alpha_flags, mode.bit) ~= 0 then
-			print("    " .. mode.name)
-		end
-	end
 end
 
 return Renderer

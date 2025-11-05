@@ -27,6 +27,8 @@ end
 local function build_translator(ctype, starts_with, strip)
 	local enums = get_enums(ctype)
 	local translate = {}
+	local friendly_translate = {}
+	local friendly_translate_rev = {}
 
 	for enum, num in pairs(enums) do
 		if enum:sub(1, #starts_with) == starts_with then
@@ -40,6 +42,8 @@ local function build_translator(ctype, starts_with, strip)
 			end
 
 			translate[friendly:lower()] = num
+			friendly_translate[friendly:lower()] = num
+			friendly_translate_rev[num] = friendly:lower()
 		end
         translate[enum:lower()] = num
 	end
@@ -67,11 +71,23 @@ local function build_translator(ctype, starts_with, strip)
 	end
 
 	return setmetatable(
-		{},
+		{
+			to_string = function(enum)
+				enum = tonumber(enum)
+				if not friendly_translate_rev[enum]  then
+					for k, v in pairs(friendly_translate_rev) do
+						print(k, v)
+					end
+					error("invalid enum: " .. tostring(enum), 2)
+				end
+				return friendly_translate_rev[enum]
+			end,
+		},
 		{
 			__call = function(_, str)
 				return translate(str)
 			end,
+			
 		}
 	)
 end

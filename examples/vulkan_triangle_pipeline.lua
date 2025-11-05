@@ -22,26 +22,30 @@ function renderer:OnRecreateSwapchain()
 	local w = tonumber(extent.width)
 	local h = tonumber(extent.height)
 	-- Vertex data: position (vec2) + color (vec3) = 5 floats per vertex, 3 vertices
-	local vertex_buffer = renderer:CreateVertexBuffer(
+	local vertex_buffer = renderer:CreateBuffer(
 		{
-			-- bottom-left (red)
-			0.0, -- x
-			-0.5, -- y
-			1.0, -- r
-			0.0, -- g
-			0.0, -- b
-			-- top (blue)
-			0.5,
-			0.5,
-			0.0,
-			1.0,
-			0.0,
-			-- bottom-right (green)
-			-0.5,
-			0.5,
-			0.0,
-			0.0,
-			1.0,
+			buffer_usage = "vertex_buffer",
+			data_type = "float",
+			data = {
+				-- bottom-left (red)
+				0.0, -- x
+				-0.5, -- y
+				1.0, -- r
+				0.0, -- g
+				0.0, -- b
+				-- top (blue)
+				0.5,
+				0.5,
+				0.0,
+				1.0,
+				0.0,
+				-- bottom-right (green)
+				-0.5,
+				0.5,
+				0.0,
+				0.0,
+				1.0,
+			},
 		}
 	)
 	pipeline = renderer:CreatePipeline(
