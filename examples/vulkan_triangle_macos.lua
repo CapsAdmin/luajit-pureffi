@@ -57,7 +57,7 @@ function renderer:OnRecreateSwapchain()
 	pipeline = renderer:CreatePipeline(
 		{
 			input_assembly = {
-				topology = "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
+				topology = "triangle_list",
 				primitive_restart = 0,
 			},
 			viewport = {
@@ -77,19 +77,19 @@ function renderer:OnRecreateSwapchain()
 			rasterizer = {
 				depth_clamp = 0,
 				discard = 0,
-				polygon_mode = "VK_POLYGON_MODE_FILL",
+				polygon_mode = "fill",
 				line_width = 1.0,
-				cull_mode = vk.VkCullModeFlagBits("VK_CULL_MODE_BACK_BIT"),
-				front_face = "VK_FRONT_FACE_CLOCKWISE",
+				cull_mode = "back",
+				front_face = "clockwise",
 				depth_bias = 0,
 			},
 			multisampling = {
 				sample_shading = 0,
-				rasterization_samples = "VK_SAMPLE_COUNT_1_BIT",
+				rasterization_samples = "1",
 			},
 			color_blend = {
 				logic_op_enabled = 0,
-				logic_op = "VK_LOGIC_OP_COPY",
+				logic_op = "copy",
 				constants = {0.0, 0.0, 0.0, 0.0},
 				attachments = {
 					{
@@ -154,20 +154,20 @@ function renderer:OnRecreateSwapchain()
 				{
 					binding = 0,
 					stride = ffi.sizeof("float") * 5, -- vec2 + vec3
-					inputRate = "VK_VERTEX_INPUT_RATE_VERTEX",
+					input_rate = "vertex",
 				},
 			},
 			vertex_attributes = {
 				{
 					location = 0,
 					binding = 0,
-					format = "VK_FORMAT_R32G32_SFLOAT", -- vec2
+					format = "R32G32_SFLOAT", -- vec2
 					offset = 0,
 				},
 				{
 					location = 1,
 					binding = 0,
-					format = "VK_FORMAT_R32G32B32_SFLOAT", -- vec3
+					format = "R32G32B32_SFLOAT", -- vec3
 					offset = ffi.sizeof("float") * 2,
 				},
 			},

@@ -1216,10 +1216,26 @@ do -- instance
 				local Pipeline = {}
 				Pipeline.__index = Pipeline
 				local enum_translator = require("helpers.enum_translator")
-				local VkShaderStageFlagBits = enum_translator(vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", {"_BIT"})
-				local VkVertexInputRate = enum_translator(vk.VkVertexInputRate, "VK_VERTEX_INPUT_RATE_")
-				local VkPrimitiveTopology = enum_translator(vk.VkPrimitiveTopology, "VK_PRIMITIVE_TOPOLOGY_")
-				local VkColorComponentFlagBits = enum_translator(vk.VkColorComponentFlagBits, "VK_COLOR_COMPONENT_", {"_BIT"})
+				local function translate_enums(enums)
+					local out = {}
+					for _, args in ipairs(enums) do
+						out[args[2]] = enum_translator(args[1], args[2], {unpack(args, 3)})
+					end
+					return out
+				end
+
+				local enums = translate_enums({
+					{vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", "_BIT"},
+					{vk.VkVertexInputRate, "VK_VERTEX_INPUT_RATE_"},
+					{vk.VkPrimitiveTopology, "VK_PRIMITIVE_TOPOLOGY_"},
+					{vk.VkColorComponentFlagBits, "VK_COLOR_COMPONENT_", "_BIT"},
+					{vk.VkPolygonMode, "VK_POLYGON_MODE_"},
+					{vk.VkCullModeFlagBits, "VK_CULL_MODE_", "_BIT"},
+					{vk.VkFrontFace, "VK_FRONT_FACE_"},
+					{vk.VkSampleCountFlagBits, "VK_SAMPLE_COUNT_", "_BIT"},
+					{vk.VkLogicOp, "VK_LOGIC_OP_"},
+					{vk.VkFormat, "VK_FORMAT_"},
+				})
 
 				function Device:CreateGraphicsPipeline(config)
 					-- config should contain: vertShaderModule, fragShaderModule, pipelineLayout, renderPass, extent
@@ -1230,7 +1246,7 @@ do -- instance
 						shaderStagesArray[i - 1] = vk.VkPipelineShaderStageCreateInfo(
 							{
 								sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
-								stage = VkShaderStageFlagBits(stage.type),
+								stage = enums.VK_SHADER_STAGE_(stage.type),
 								module = stage.module.ptr[0],
 								pName = "main",
 							}
@@ -1250,7 +1266,7 @@ do -- instance
 						for i, binding in ipairs(config.vertexBindings) do
 							bindingArray[i - 1].binding = binding.binding or (i - 1)
 							bindingArray[i - 1].stride = binding.stride
-							bindingArray[i - 1].inputRate = VkVertexInputRate(binding.inputRate or "vertex")
+							bindingArray[i - 1].inputRate = enums.VK_VERTEX_INPUT_RATE_(binding.input_rate or "vertex")
 						end
 					end
 
@@ -1261,7 +1277,7 @@ do -- instance
 						for i, attr in ipairs(config.vertexAttributes) do
 							attributeArray[i - 1].location = attr.location
 							attributeArray[i - 1].binding = attr.binding or 0
-							attributeArray[i - 1].format = vk.VkFormat(attr.format)
+							attributeArray[i - 1].format = enums.VK_FORMAT_(attr.format)
 							attributeArray[i - 1].offset = attr.offset
 						end
 					end
@@ -1281,7 +1297,7 @@ do -- instance
 						vk.VkPipelineInputAssemblyStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO",
-							topology = VkPrimitiveTopology(config.input_assembly.topology or "triangle_list"),
+							topology = enums.VK_PRIMITIVE_TOPOLOGY_(config.input_assembly.topology or "triangle_list"),
 							primitiveRestartEnable = config.input_assembly.primitive_restart or 0,
 						}
 					)
@@ -1326,10 +1342,10 @@ do -- instance
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO",
 							depthClampEnable = config.rasterizer.depth_clamp or 0,
 							rasterizerDiscardEnable = config.rasterizer.discard or 0,
-							polygonMode = config.rasterizer.polygon_mode or "VK_POLYGON_MODE_FILL",
+							polygonMode = enums.VK_POLYGON_MODE_(config.rasterizer.polygon_mode or "fill"),
 							lineWidth = config.rasterizer.line_width or 1.0,
-							cullMode = config.rasterizer.cull_mode or vk.VkCullModeFlagBits("VK_CULL_MODE_BACK_BIT"),
-							frontFace = config.rasterizer.front_face or "VK_FRONT_FACE_CLOCKWISE",
+							cullMode = enums.VK_CULL_MODE_(config.rasterizer.cull_mode or "back"),
+							frontFace = enums.VK_FRONT_FACE_(config.rasterizer.front_face or "clockwise"),
 							depthBiasEnable = config.rasterizer.depth_bias or 0,
 						}
 					)
@@ -1339,7 +1355,7 @@ do -- instance
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO",
 							sampleShadingEnable = config.multisampling.sample_shading or 0,
-							rasterizationSamples = config.multisampling.rasterization_samples or "VK_SAMPLE_COUNT_1_BIT",
+							rasterizationSamples = enums.VK_SAMPLE_COUNT_(config.multisampling.rasterization_samples or "1"),
 						}
 					)
 					config.color_blend = config.color_blend or {}
@@ -1349,7 +1365,7 @@ do -- instance
 					for i, color_blend_attachment in ipairs(config.color_blend.attachments) do
 						colorBlendAttachments[i] = vk.VkPipelineColorBlendAttachmentState(
 							{
-								colorWriteMask = VkColorComponentFlagBits(
+								colorWriteMask = enums.VK_COLOR_COMPONENT_(
 									color_blend_attachment.color_write_mask or
 										{"R", "G", "B", "A"}
 								),
@@ -1370,7 +1386,7 @@ do -- instance
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO",
 							logicOpEnable = config.color_blend.logic_op_enabled or 0,
-							logicOp = config.color_blend.logic_op or "VK_LOGIC_OP_COPY",
+							logicOp = enums.VK_LOGIC_OP_(config.color_blend.logic_op or "copy"),
 							attachmentCount = #colorBlendAttachments,
 							pAttachments = colorBlendAttachment,
 							blendConstants = config.color_blend.constants or {0.0, 0.0, 0.0, 0.0},
