@@ -45,7 +45,6 @@ local enums = translate_enums(
 		{vk.VkPipelineBindPoint, "VK_PIPELINE_BIND_POINT_"},
 	}
 )
-
 -- Export enums for use in applications
 vulkan.enums = enums
 
@@ -481,13 +480,14 @@ do -- instance
 
 				function Queue:SubmitAndWait(device, commandBuffer, fence)
 					lib.vkResetFences(device.ptr[0], 1, fence.ptr)
-
-					local submitInfo = vk.Box(vk.VkSubmitInfo, {
-						sType = "VK_STRUCTURE_TYPE_SUBMIT_INFO",
-						commandBufferCount = 1,
-						pCommandBuffers = commandBuffer.ptr,
-					})
-
+					local submitInfo = vk.Box(
+						vk.VkSubmitInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_SUBMIT_INFO",
+							commandBufferCount = 1,
+							pCommandBuffers = commandBuffer.ptr,
+						}
+					)
 					vk_assert(
 						lib.vkQueueSubmit(self.ptr[0], 1, submitInfo, fence.ptr[0]),
 						"failed to submit queue"
@@ -787,11 +787,7 @@ do -- instance
 					end
 
 					function CommandBuffer:BindPipeline(pipeline, type)
-						lib.vkCmdBindPipeline(
-							self.ptr[0],
-							enums.VK_PIPELINE_BIND_POINT_(type),
-							pipeline.ptr[0]
-						)
+						lib.vkCmdBindPipeline(self.ptr[0], enums.VK_PIPELINE_BIND_POINT_(type), pipeline.ptr[0])
 					end
 
 					function CommandBuffer:BindVertexBuffers(firstBinding, buffers, offsets)
@@ -861,21 +857,19 @@ do -- instance
 							self.ptr[0],
 							config.image,
 							"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
-							vk.Box(vk.VkClearColorValue, {
-								float32 = config.color or {0.0, 0.0, 0.0, 1.0},
-							}),
+							vk.Box(
+								vk.VkClearColorValue,
+								{
+									float32 = config.color or {0.0, 0.0, 0.0, 1.0},
+								}
+							),
 							1,
 							range
 						)
 					end
 
 					function CommandBuffer:Dispatch(groupCountX, groupCountY, groupCountZ)
-						lib.vkCmdDispatch(
-							self.ptr[0],
-							groupCountX or 1,
-							groupCountY or 1,
-							groupCountZ or 1
-						)
+						lib.vkCmdDispatch(self.ptr[0], groupCountX or 1, groupCountY or 1, groupCountZ or 1)
 					end
 
 					function CommandBuffer:PipelineBarrier(config)
@@ -887,10 +881,8 @@ do -- instance
 							vertex = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_VERTEX_SHADER_BIT"),
 							all_commands = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_ALL_COMMANDS_BIT"),
 						}
-
 						local srcStage = stage_map[config.srcStage or "compute"]
 						local dstStage = stage_map[config.dstStage or "fragment"]
-
 						local imageBarriers = nil
 						local imageBarrierCount = 0
 
@@ -899,23 +891,25 @@ do -- instance
 							imageBarriers = vk.Array(vk.VkImageMemoryBarrier)(imageBarrierCount)
 
 							for i, barrier in ipairs(config.imageBarriers) do
-								imageBarriers[i - 1] = vk.VkImageMemoryBarrier({
-									sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
-									srcAccessMask = vulkan.enums.VK_ACCESS_(barrier.srcAccessMask or "none"),
-									dstAccessMask = vulkan.enums.VK_ACCESS_(barrier.dstAccessMask or "none"),
-									oldLayout = enums.VK_IMAGE_LAYOUT_(barrier.oldLayout or "undefined"),
-									newLayout = enums.VK_IMAGE_LAYOUT_(barrier.newLayout or "general"),
-									srcQueueFamilyIndex = 0xFFFFFFFF,
-									dstQueueFamilyIndex = 0xFFFFFFFF,
-									image = barrier.image,
-									subresourceRange = {
-										aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-										baseMipLevel = 0,
-										levelCount = 1,
-										baseArrayLayer = 0,
-										layerCount = 1,
-									},
-								})
+								imageBarriers[i - 1] = vk.VkImageMemoryBarrier(
+									{
+										sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
+										srcAccessMask = vulkan.enums.VK_ACCESS_(barrier.srcAccessMask or "none"),
+										dstAccessMask = vulkan.enums.VK_ACCESS_(barrier.dstAccessMask or "none"),
+										oldLayout = enums.VK_IMAGE_LAYOUT_(barrier.oldLayout or "undefined"),
+										newLayout = enums.VK_IMAGE_LAYOUT_(barrier.newLayout or "general"),
+										srcQueueFamilyIndex = 0xFFFFFFFF,
+										dstQueueFamilyIndex = 0xFFFFFFFF,
+										image = barrier.image.ptr[0],
+										subresourceRange = {
+											aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+											baseMipLevel = 0,
+											levelCount = 1,
+											baseArrayLayer = 0,
+											layerCount = 1,
+										},
+									}
+								)
 							end
 						end
 
@@ -924,32 +918,36 @@ do -- instance
 							srcStage,
 							dstStage,
 							0,
-							0, nil,
-							0, nil,
+							0,
+							nil,
+							0,
+							nil,
 							imageBarrierCount,
 							imageBarriers
 						)
 					end
 
 					function CommandBuffer:CopyImageToImage(srcImage, dstImage, width, height)
-						local region = vk.Box(vk.VkImageCopy, {
-							srcSubresource = {
-								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-								mipLevel = 0,
-								baseArrayLayer = 0,
-								layerCount = 1,
-							},
-							srcOffset = {x = 0, y = 0, z = 0},
-							dstSubresource = {
-								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-								mipLevel = 0,
-								baseArrayLayer = 0,
-								layerCount = 1,
-							},
-							dstOffset = {x = 0, y = 0, z = 0},
-							extent = {width = width, height = height, depth = 1},
-						})
-
+						local region = vk.Box(
+							vk.VkImageCopy,
+							{
+								srcSubresource = {
+									aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+									mipLevel = 0,
+									baseArrayLayer = 0,
+									layerCount = 1,
+								},
+								srcOffset = {x = 0, y = 0, z = 0},
+								dstSubresource = {
+									aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+									mipLevel = 0,
+									baseArrayLayer = 0,
+									layerCount = 1,
+								},
+								dstOffset = {x = 0, y = 0, z = 0},
+								extent = {width = width, height = height, depth = 1},
+							}
+						)
 						lib.vkCmdCopyImage(
 							self.ptr[0],
 							srcImage,
@@ -962,20 +960,22 @@ do -- instance
 					end
 
 					function CommandBuffer:CopyBufferToImage(buffer, image, width, height)
-						local region = vk.Box(vk.VkBufferImageCopy, {
-							bufferOffset = 0,
-							bufferRowLength = 0,
-							bufferImageHeight = 0,
-							imageSubresource = {
-								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-								mipLevel = 0,
-								baseArrayLayer = 0,
-								layerCount = 1,
-							},
-							imageOffset = {x = 0, y = 0, z = 0},
-							imageExtent = {width = width, height = height, depth = 1},
-						})
-
+						local region = vk.Box(
+							vk.VkBufferImageCopy,
+							{
+								bufferOffset = 0,
+								bufferRowLength = 0,
+								bufferImageHeight = 0,
+								imageSubresource = {
+									aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+									mipLevel = 0,
+									baseArrayLayer = 0,
+									layerCount = 1,
+								},
+								imageOffset = {x = 0, y = 0, z = 0},
+								imageExtent = {width = width, height = height, depth = 1},
+							}
+						)
 						lib.vkCmdCopyBufferToImage(
 							self.ptr[0],
 							buffer.ptr[0],
@@ -1167,6 +1167,7 @@ do -- instance
 			function Device:UpdateDescriptorSet(descriptorSet, binding, resource, descriptorType)
 				-- Accept both friendly names and VK_ constants for backwards compatibility
 				local isStorageImage = false
+
 				if descriptorType and not descriptorType:match("^VK_") then
 					isStorageImage = descriptorType == "storage_image"
 					descriptorType = enums.VK_DESCRIPTOR_TYPE_(descriptorType)
@@ -1427,12 +1428,9 @@ do -- instance
 						lib.vkCreateImage(self.ptr[0], imageInfo, nil, image_ptr),
 						"failed to create image"
 					)
-
 					local memRequirements = vk.Box(vk.VkMemoryRequirements)()
 					lib.vkGetImageMemoryRequirements(self.ptr[0], image_ptr[0], memRequirements)
-
 					properties = enums.VK_MEMORY_PROPERTY_(properties or "device_local")
-
 					local allocInfo = vk.Box(
 						vk.VkMemoryAllocateInfo,
 						{
@@ -1447,7 +1445,6 @@ do -- instance
 						"failed to allocate image memory"
 					)
 					lib.vkBindImageMemory(self.ptr[0], image_ptr[0], memory_ptr[0], 0)
-
 					return setmetatable(
 						{
 							ptr = image_ptr,

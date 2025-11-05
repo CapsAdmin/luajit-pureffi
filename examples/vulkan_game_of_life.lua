@@ -38,10 +38,10 @@ void main() {
 	int count = 0;
 	for (int dy = -1; dy <= 1; dy++) {
 		for (int dx = -1; dx <= 1; dx++) {
-			if (dx == 0 && dy == 0) continue;
+			if (dx == 0 && dy == 0) continue; 
 
 			ivec2 neighbor = ivec2(
-				(pos.x + dx + size.x) % size.x,
+				(pos.x + dx + size.x) % size.x, 
 				(pos.y + dy + size.y) % size.y
 			);
 
@@ -146,25 +146,15 @@ void main() {
 	outColor = vec4(color, 1.0);
 }
 ]]
--- Storage for compute resources
-local compute_shader
-local compute_pipeline
-local compute_pipeline_layout
-local compute_descriptor_set_layout
-local compute_descriptor_pool
-local compute_descriptor_sets = {}
--- Storage images for ping-pong
-local storage_images = {}
-local storage_image_views = {}
--- Graphics pipeline resources
 local graphics_pipeline
-local graphics_uniform_buffer
-local current_image_index = 1
 
 -- Random initialization helper
-local function initialize_random_state(device, image, width, height)
+local function initialize_random_state()
 	-- Create staging buffer with random data
-	local pixel_count = width * height
+	local extent = renderer:GetExtent()
+	local w = tonumber(extent.width)
+	local h = tonumber(extent.height)
+	local pixel_count = w * h
 	local data = ffi.new("uint8_t[?]", pixel_count * 4)
 	math.randomseed(os.time())
 
@@ -177,79 +167,133 @@ local function initialize_random_state(device, image, width, height)
 		data[i * 4 + 3] = 255
 	end
 
-	renderer:UploadToImage(image, data, pixel_count, width, height)
+	return data, pixel_count, w, h
 end
 
-function renderer:OnRecreateSwapchain()
-	local is_first_call = storage_images == nil or #storage_images == 0
-	-- Set simulation size based on window dimensions
-	local extent = self:GetExtent()
-	GAME_WIDTH = tonumber(extent.width)
-	GAME_HEIGHT = tonumber(extent.height)
-	-- Create storage images for compute shader (ping-pong buffers)
-	storage_images = {}
-	storage_image_views = {}
+do
+	local ComputePipeline = {}
+	ComputePipeline.__index = ComputePipeline
 
-	for i = 1, 2 do
-		storage_images[i] = self.device:CreateImage(
-			GAME_WIDTH,
-			GAME_HEIGHT,
-			"R8G8B8A8_UNORM",
-			{"storage", "transfer_dst", "transfer_src"},
-			"device_local"
+	function Renderer:CreateComputePipeline(config)
+		local shader = self.device:CreateShaderModule(config.shader, "compute")
+		-- Descriptor set layout for compute (2 storage images)
+		local descriptor_set_layout = self.device:CreateDescriptorSetLayout(config.descriptor_layout)
+		local pipeline_layout = self.device:CreatePipelineLayout({descriptor_set_layout})
+		local pipeline = self.device:CreateComputePipeline(shader, pipeline_layout)
+		-- Create descriptor pool for compute (2 sets, each with 2 storage images)
+		local descriptor_pool = self.device:CreateDescriptorPool(config.descriptor_pool, #config.descriptor_layout)
+		-- Create descriptor sets for ping-pong
+		local descriptor_sets = {}
+
+		for i = 1, #config.descriptor_layout do
+			descriptor_sets[i] = descriptor_pool:AllocateDescriptorSet(descriptor_set_layout)
+		end
+
+		return setmetatable(
+			{
+				shader = shader,
+				pipeline = pipeline,
+				pipeline_layout = pipeline_layout,
+				descriptor_set_layout = descriptor_set_layout,
+				descriptor_pool = descriptor_pool,
+				descriptor_sets = descriptor_sets,
+				current_image_index = 1,
+				config = config,
+			},
+			ComputePipeline
 		)
-		storage_image_views[i] = storage_images[i]:CreateView()
-		initialize_random_state(self.device, storage_images[i], GAME_WIDTH, GAME_HEIGHT)
 	end
 
-	-- Create compute shader and pipeline (only on first call)
-	if is_first_call then
-		compute_shader = self.device:CreateShaderModule(COMPUTE_SHADER, "compute")
-		-- Descriptor set layout for compute (2 storage images)
-		compute_descriptor_set_layout = self.device:CreateDescriptorSetLayout(
-			{
-				{binding = 0, type = "storage_image", stageFlags = "compute", count = 1},
-				{binding = 1, type = "storage_image", stageFlags = "compute", count = 1},
-			}
-		)
-		compute_pipeline_layout = self.device:CreatePipelineLayout({compute_descriptor_set_layout})
-		compute_pipeline = self.device:CreateComputePipeline(compute_shader, compute_pipeline_layout)
-		-- Create descriptor pool for compute (2 sets, each with 2 storage images)
-		compute_descriptor_pool = self.device:CreateDescriptorPool({
-			{type = "storage_image", count = 4},
-		}, 2)
-		-- Create descriptor sets for ping-pong
-		compute_descriptor_sets = {}
+	function ComputePipeline:Update(data, pixel_count, w, h)
+		-- Create storage images for compute shader (ping-pong buffers)
+		self.storage_images = {}
+		self.storage_image_views = {}
 
-		for i = 1, 2 do
-			local desc_set = compute_descriptor_pool:AllocateDescriptorSet(compute_descriptor_set_layout)
-			compute_descriptor_sets[i] = desc_set
+		for i = 1, #self.config.descriptor_layout do
+			local image = renderer.device:CreateImage(
+				w,
+				h,
+				"R8G8B8A8_UNORM",
+				{"storage", "transfer_dst", "transfer_src"},
+				"device_local"
+			)
+			renderer:UploadToImage(image, data, pixel_count, w, h)
+
+			self.storage_images[i] = image
+			self.storage_image_views[i] = image:CreateView()
+		end
+
+		-- Update descriptor sets with new storage image views
+		for i = 1, #self.config.descriptor_layout do
+			local input_idx = i
+			local output_idx = (i % 2) + 1
+			renderer.device:UpdateDescriptorSet(self.descriptor_sets[i], 0, self.storage_image_views[input_idx], "storage_image")
+			renderer.device:UpdateDescriptorSet(self.descriptor_sets[i], 1, self.storage_image_views[output_idx], "storage_image")
 		end
 	end
 
-	-- Update descriptor sets with new storage image views
-	for i = 1, 2 do
-		local input_idx = i
-		local output_idx = (i % 2) + 1
-		self.device:UpdateDescriptorSet(compute_descriptor_sets[i], 0, storage_image_views[input_idx], "storage_image")
-		self.device:UpdateDescriptorSet(compute_descriptor_sets[i], 1, storage_image_views[output_idx], "storage_image")
-	end
-
-	-- Create uniform buffer for graphics shader (only on first call)
-	if is_first_call then
-		graphics_uniform_buffer = self:CreateBuffer(
+	function ComputePipeline:Bind(cmd)
+		-- Bind compute pipeline
+		cmd:BindPipeline(self.pipeline, "compute")
+		cmd:BindDescriptorSets(
+			"compute",
+			self.pipeline_layout,
+			{self.descriptor_sets[self.current_image_index]},
+			0
+		)
+		local extent = renderer:GetExtent()
+		local w = tonumber(extent.width)
+		local h = tonumber(extent.height)
+		-- Dispatch compute shader
+		local group_count_x = math.ceil(w / WORKGROUP_SIZE)
+		local group_count_y = math.ceil(h / WORKGROUP_SIZE)
+		cmd:Dispatch(group_count_x, group_count_y, 1)
+		-- Barrier: compute write -> fragment read
+		cmd:PipelineBarrier(
 			{
-				byte_size = ffi.sizeof(UniformData),
-				buffer_usage = "uniform_buffer",
-				data = ffi.new(UniformData, {0.0, 0.0, 0.0, 1.0}),
+				srcStage = "compute",
+				dstStage = "fragment",
+				imageBarriers = {
+					{
+						image = self.storage_images[(self.current_image_index % 2) + 1],
+						srcAccessMask = "shader_write",
+						dstAccessMask = "shader_read",
+						oldLayout = "general",
+						newLayout = "general",
+					},
+				},
 			}
 		)
+		-- Swap images for next frame
+		self.current_image_index = (self.current_image_index % 2) + 1
 	end
+end
 
-	-- Create or recreate graphics pipeline
+local compute_pipeline = renderer:CreateComputePipeline(
+	{
+		shader = COMPUTE_SHADER,
+		descriptor_layout = {
+			{binding = 0, type = "storage_image", stageFlags = "compute", count = 1},
+			{binding = 1, type = "storage_image", stageFlags = "compute", count = 1},
+		},
+		descriptor_pool = {
+			{type = "storage_image", count = 4},
+		},
+	}
+)
+local graphics_uniform_buffer = renderer:CreateBuffer(
+	{
+		byte_size = ffi.sizeof(UniformData),
+		buffer_usage = "uniform_buffer",
+		data = ffi.new(UniformData, {0.0, 0.0, 0.0, 1.0}),
+	}
+)
+
+function renderer:OnRecreateSwapchain()
 	local extent = self:GetExtent()
 	local w = tonumber(extent.width)
 	local h = tonumber(extent.height)
+	compute_pipeline:Update(initialize_random_state())
 	-- Recreate pipeline to update viewport/scissor
 	graphics_pipeline = self:CreatePipeline(
 		{
@@ -261,7 +305,7 @@ function renderer:OnRecreateSwapchain()
 			vertex_buffers = {},
 			uniform_buffers = {},
 			storage_images = {
-				{stage = "fragment", image_view = storage_image_views[1]},
+				{stage = "fragment", image_view = compute_pipeline.storage_image_views[1]},
 			},
 			uniform_buffers_graphics = {
 				{stage = "fragment", buffer = graphics_uniform_buffer},
@@ -302,7 +346,6 @@ renderer:OnRecreateSwapchain()
 wnd:Initialize()
 wnd:OpenWindow()
 -- Simulation state
-local generation = 0
 local paused = false
 local time = 0.0
 print("Game of Life - Vulkan Compute Shader")
@@ -328,7 +371,6 @@ while true do
 			print(paused and "Paused" or "Resumed")
 		elseif events.key == "r" or events.key == "R" then
 			initialize_random_state(renderer.device, storage_images[1], GAME_WIDTH, GAME_HEIGHT)
-			generation = 0
 			print("Reset to random state")
 		end
 	end
@@ -337,38 +379,8 @@ while true do
 		local cmd = renderer:GetCommandBuffer()
 
 		-- Run compute shader (only if not paused)
-		if not paused then
-			-- Bind compute pipeline
-			cmd:BindPipeline(compute_pipeline, "compute")
-			cmd:BindDescriptorSets(
-				"compute",
-				compute_pipeline_layout,
-				{compute_descriptor_sets[current_image_index]},
-				0
-			)
-			-- Dispatch compute shader
-			local group_count_x = math.ceil(GAME_WIDTH / WORKGROUP_SIZE)
-			local group_count_y = math.ceil(GAME_HEIGHT / WORKGROUP_SIZE)
-			cmd:Dispatch(group_count_x, group_count_y, 1)
-			-- Barrier: compute write -> fragment read
-			cmd:PipelineBarrier(
-				{
-					srcStage = "compute",
-					dstStage = "fragment",
-					imageBarriers = {
-						{
-							image = storage_images[(current_image_index % 2) + 1].ptr[0],
-							srcAccessMask = "shader_write",
-							dstAccessMask = "shader_read",
-							oldLayout = "general",
-							newLayout = "general",
-						},
-					},
-				}
-			)
-			-- Swap images for next frame
-			current_image_index = (current_image_index % 2) + 1
-			generation = generation + 1
+		if not paused then 
+			compute_pipeline:Bind(cmd)
 		end
 
 		-- Update uniform buffer
@@ -393,5 +405,4 @@ while true do
 	threads.sleep(16)
 end
 
-print(string.format("Simulation ended at generation %d", generation))
 renderer:WaitForIdle()

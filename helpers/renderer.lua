@@ -463,7 +463,7 @@ end
 				dstStage = "transfer",
 				imageBarriers = {
 					{
-						image = image.ptr[0],
+						image = image,
 						srcAccessMask = "none",
 						dstAccessMask = "transfer_write",
 						oldLayout = "undefined",
@@ -481,7 +481,7 @@ end
 				dstStage = "compute",
 				imageBarriers = {
 					{
-						image = image.ptr[0],
+						image = image,
 						srcAccessMask = "transfer_write",
 						dstAccessMask = "shader_read",
 						oldLayout = "transfer_dst_optimal",
