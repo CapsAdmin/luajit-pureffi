@@ -129,10 +129,11 @@ function Renderer:RecreateSwapchain()
 	if self.OnRecreateSwapchain then self:OnRecreateSwapchain() end
 end
 
-function Renderer:CreateRenderPass()
+function Renderer:CreateRenderPass(samples)
 	if self.render_pass then return self.render_pass end
 
-	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index])
+	self.msaa_samples = samples or "1"
+	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index], self.msaa_samples)
 	return self.render_pass
 end
 
@@ -151,6 +152,43 @@ function Renderer:CreateImageViews()
 			self.device:CreateImageView(swapchain_image, self.surface_formats[self.config.surface_format_index].format)
 		)
 	end
+	
+	-- Create MSAA resources if needed
+	if self.msaa_samples and self.msaa_samples ~= "1" then
+		self:CreateMSAAResources()
+	end
+end
+
+function Renderer:CreateMSAAResources()
+	local extent = self.surface_capabilities[0].currentExtent
+	local format = self.surface_formats[self.config.surface_format_index].format
+	
+	-- Clean up old MSAA resources if they exist
+	if self.msaa_images then
+		for _, img in ipairs(self.msaa_images) do
+			-- Images are garbage collected automatically
+		end
+	end
+	
+	self.msaa_images = {}
+	self.msaa_image_views = {}
+	
+	-- Create one MSAA image/view per swapchain image
+	for i = 1, #self.swapchain_images do
+		local msaa_image = self.device:CreateImage(
+			extent.width,
+			extent.height,
+			format,
+			{"color_attachment", "transient_attachment"},
+			"device_local",
+			self.msaa_samples
+		)
+		
+		local msaa_image_view = msaa_image:CreateView()
+		
+		table.insert(self.msaa_images, msaa_image)
+		table.insert(self.msaa_image_views, msaa_image_view)
+	end
 end
 
 function Renderer:CreateFramebuffers()
@@ -165,10 +203,15 @@ function Renderer:CreateFramebuffers()
 	local extent = self.surface_capabilities[0].currentExtent
 	self.framebuffers = {}
 
-	for _, imageView in ipairs(self.image_views) do
+	for i, imageView in ipairs(self.image_views) do
+		local msaa_view = nil
+		if self.msaa_image_views and #self.msaa_image_views > 0 then
+			msaa_view = self.msaa_image_views[i].ptr[0]
+		end
+		
 		table.insert(
 			self.framebuffers,
-			self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height)
+			self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height, msaa_view)
 		)
 	end
 end
@@ -260,7 +303,13 @@ do
 		local self = setmetatable({}, Pipeline)
 		local uniform_buffers = {}
 
-		local renderPass = renderer:CreateRenderPass()
+		-- Extract sample count from multisampling config
+		local samples = "1"
+		if config.multisampling and config.multisampling.rasterization_samples then
+			samples = config.multisampling.rasterization_samples
+		end
+
+		local renderPass = renderer:CreateRenderPass(samples)
 		renderer:CreateImageViews()
 		renderer:CreateFramebuffers()
 		local layout = {}

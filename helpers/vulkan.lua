@@ -1295,20 +1295,59 @@ do -- instance
 				local RenderPass = {}
 				RenderPass.__index = RenderPass
 
-				function Device:CreateRenderPass(surfaceFormat)
-					local colorAttachment = vk.Box(
-						vk.VkAttachmentDescription,
-						{
-							format = enums.VK_FORMAT_(surfaceFormat.format),
-							samples = "VK_SAMPLE_COUNT_1_BIT",
-							loadOp = "VK_ATTACHMENT_LOAD_OP_CLEAR",
-							storeOp = "VK_ATTACHMENT_STORE_OP_STORE",
-							stencilLoadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE",
-							stencilStoreOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE",
-							initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
-							finalLayout = "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
-						}
-					)
+				function Device:CreateRenderPass(surfaceFormat, samples)
+					samples = samples or "1"
+					local attachments
+					local attachment_count
+
+					if samples == "1" then
+						attachment_count = 1
+						attachments = vk.Box(
+							vk.VkAttachmentDescription,
+							{
+								format = enums.VK_FORMAT_(surfaceFormat.format),
+								samples = "VK_SAMPLE_COUNT_1_BIT",
+								loadOp = "VK_ATTACHMENT_LOAD_OP_CLEAR",
+								storeOp = "VK_ATTACHMENT_STORE_OP_STORE",
+								stencilLoadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE",
+								stencilStoreOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE",
+								initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
+								finalLayout = "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
+							}
+						)
+					else
+						attachment_count = 2
+						attachments = vk.Array(
+							vk.VkAttachmentDescription,
+							2,
+							{
+								-- Attachment 0: MSAA color attachment
+								{
+									format = enums.VK_FORMAT_(surfaceFormat.format),
+									samples = "VK_SAMPLE_COUNT_" .. samples .. "_BIT",
+									loadOp = "VK_ATTACHMENT_LOAD_OP_CLEAR",
+									storeOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE", -- Don't need to store MSAA
+									stencilLoadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE",
+									stencilStoreOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE",
+									initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
+									finalLayout = "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
+								},
+								-- Attachment 1: Resolve target (swapchain)
+								{
+									format = enums.VK_FORMAT_(surfaceFormat.format),
+									samples = "VK_SAMPLE_COUNT_1_BIT",
+									loadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE", -- Don't care about initial contents
+									storeOp = "VK_ATTACHMENT_STORE_OP_STORE", -- Store resolved result
+									stencilLoadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE",
+									stencilStoreOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE",
+									initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
+									finalLayout = "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
+								},
+							}
+						)
+					--attachments[0].samples = "VK_SAMPLE_COUNT_2_BIT"
+					end
+
 					local colorAttachmentRef = vk.Box(
 						vk.VkAttachmentReference,
 						{
@@ -1322,6 +1361,15 @@ do -- instance
 							pipelineBindPoint = "VK_PIPELINE_BIND_POINT_GRAPHICS",
 							colorAttachmentCount = 1,
 							pColorAttachments = colorAttachmentRef,
+							pResolveAttachments = samples ~= "1" and
+								vk.Box(
+									vk.VkAttachmentReference,
+									{
+										attachment = 1,
+										layout = "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
+									}
+								) or
+								nil,
 						}
 					)
 					local dependency = vk.Box(
@@ -1339,8 +1387,8 @@ do -- instance
 						vk.VkRenderPassCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO",
-							attachmentCount = 1,
-							pAttachments = colorAttachment,
+							attachmentCount = attachment_count,
+							pAttachments = attachments,
 							subpassCount = 1,
 							pSubpasses = subpass,
 							dependencyCount = 1,
@@ -1350,9 +1398,9 @@ do -- instance
 					local ptr = vk.Box(vk.VkRenderPass)()
 					vk_assert(
 						lib.vkCreateRenderPass(self.ptr[0], renderPassInfo, nil, ptr),
-						"failed to create render pass"
+						"failed to create render pass with MSAA"
 					)
-					return setmetatable({ptr = ptr, device = self}, RenderPass)
+					return setmetatable({ptr = ptr, device = self, samples = samples}, RenderPass)
 				end
 
 				function RenderPass:__gc()
@@ -1364,14 +1412,31 @@ do -- instance
 				local Framebuffer = {}
 				Framebuffer.__index = Framebuffer
 
-				function Device:CreateFramebuffer(renderPass, imageView, width, height)
-					local attachments = vk.Array(vk.VkImageView, 1, {imageView})
+				function Device:CreateFramebuffer(renderPass, imageView, width, height, msaaImageView)
+					local attachments
+					local attachmentCount
+
+					if msaaImageView then
+						-- MSAA: first attachment is MSAA color, second is resolve target (swapchain)
+						local attachment_array = vk.Array(vk.VkImageView)(2)
+						attachment_array[0] = msaaImageView
+						attachment_array[1] = imageView
+						attachments = attachment_array
+						attachmentCount = 2
+					else
+						-- Non-MSAA: single attachment
+						local attachment_array = vk.Array(vk.VkImageView)(1)
+						attachment_array[0] = imageView
+						attachments = attachment_array
+						attachmentCount = 1
+					end
+
 					local framebufferInfo = vk.Box(
 						vk.VkFramebufferCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO",
 							renderPass = renderPass.ptr[0],
-							attachmentCount = 1,
+							attachmentCount = attachmentCount,
 							pAttachments = attachments,
 							width = width,
 							height = height,
@@ -1429,7 +1494,8 @@ do -- instance
 				local Image = {}
 				Image.__index = Image
 
-				function Device:CreateImage(width, height, format, usage, properties)
+				function Device:CreateImage(width, height, format, usage, properties, samples)
+					samples = samples or "1"
 					local imageInfo = vk.Box(
 						vk.VkImageCreateInfo,
 						{
@@ -1443,7 +1509,7 @@ do -- instance
 							},
 							mipLevels = 1,
 							arrayLayers = 1,
-							samples = "VK_SAMPLE_COUNT_1_BIT",
+							samples = "VK_SAMPLE_COUNT_" .. samples .. "_BIT",
 							tiling = "VK_IMAGE_TILING_OPTIMAL",
 							usage = enums.VK_IMAGE_USAGE_(usage),
 							sharingMode = "VK_SHARING_MODE_EXCLUSIVE",
@@ -1741,15 +1807,17 @@ do -- instance
 							stencilTestEnable = config.depth_stencil.stencil_test or 0,
 						}
 					)
-
 					-- Dynamic state configuration
 					local dynamicStateInfo = nil
+
 					if config.dynamic_states then
 						local dynamicStateCount = #config.dynamic_states
 						local dynamicStateArray = vk.Array(vk.VkDynamicState)(dynamicStateCount)
+
 						for i, state in ipairs(config.dynamic_states) do
 							dynamicStateArray[i - 1] = enums.VK_DYNAMIC_STATE_(state)
 						end
+
 						dynamicStateInfo = vk.Box(
 							vk.VkPipelineDynamicStateCreateInfo,
 							{
