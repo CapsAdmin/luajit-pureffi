@@ -89,6 +89,7 @@ do -- instance
 		end
 
 		print("extensions available:")
+
 		for k, v in ipairs(vulkan.GetAvailableExtensions()) do
 			print("\t" .. v)
 		end
@@ -107,7 +108,6 @@ do -- instance
 			}
 		)
 		print("version loaded: " .. vulkan.GetVersion())
-	
 		local extension_names = extensions and
 			vk.Array(ffi.typeof("const char*"), #extensions, extensions) or
 			nil
@@ -1216,31 +1216,30 @@ do -- instance
 				local Pipeline = {}
 				Pipeline.__index = Pipeline
 
+				local function to_enum()
+
+				end
+
+				local function to_bit_flag()
+
+				end
+
 				function Device:CreateGraphicsPipeline(config)
 					-- config should contain: vertShaderModule, fragShaderModule, pipelineLayout, renderPass, extent
-					local vertShaderStageInfo = vk.Box(
-						vk.VkPipelineShaderStageCreateInfo,
-						{
-							sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
-							stage = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_VERTEX_BIT"),
-							module = config.vertShaderModule.ptr[0],
-							pName = "main",
-						}
-					)
-					local fragShaderStageInfo = vk.Box(
-						vk.VkPipelineShaderStageCreateInfo,
-						{
-							sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
-							stage = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT"),
-							module = config.fragShaderModule.ptr[0],
-							pName = "main",
-						}
-					)
-					-- Allocate shader stages array manually
-					local stageArrayType = ffi.typeof("$ [2]", vk.VkPipelineShaderStageCreateInfo)
+					local stageArrayType = ffi.typeof("$ [" .. #config.shaderModules .. "]", vk.VkPipelineShaderStageCreateInfo)
 					local shaderStagesArray = ffi.new(stageArrayType)
-					shaderStagesArray[0] = vertShaderStageInfo[0]
-					shaderStagesArray[1] = fragShaderStageInfo[0]
+
+					for i, stage in ipairs(config.shaderModules) do
+						shaderStagesArray[i - 1] = vk.VkPipelineShaderStageCreateInfo(
+							{
+								sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
+								stage = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_" .. stage.type:upper() .. "_BIT"),
+								module = stage.module.ptr[0],
+								pName = "main",
+							}
+						)
+					end
+
 					-- Vertex input state
 					local bindingArray = nil
 					local attributeArray = nil
@@ -1280,32 +1279,39 @@ do -- instance
 							pVertexAttributeDescriptions = attributeArray,
 						}
 					)
+					config.input_assembly = config.input_assembly or {}
 					local inputAssembly = vk.Box(
 						vk.VkPipelineInputAssemblyStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO",
-							topology = "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
-							primitiveRestartEnable = 0,
+							topology = config.input_assembly.topology or "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
+							primitiveRestartEnable = config.input_assembly.primitive_restart or 0,
 						}
 					)
+					config.viewport = config.viewport or {}
 					local viewport = vk.Box(
 						vk.VkViewport,
 						{
-							x = 0.0,
-							y = 0.0,
-							width = tonumber(config.extent.width),
-							height = tonumber(config.extent.height),
-							minDepth = 0.0,
-							maxDepth = 1.0,
+							x = config.viewport.x or 0.0,
+							y = config.viewport.y or 0.0,
+							width = config.viewport.w or tonumber(config.extent.width),
+							height = config.viewport.h or tonumber(config.extent.height),
+							minDepth = config.viewport.min_depth or 0.0,
+							maxDepth = config.viewport.max_depth or 1.0,
 						}
 					)
+					config.scissor = config.scissor or {}
 					local scissor = vk.Box(
 						vk.VkRect2D,
 						{
-							offset = {x = 0, y = 0},
-							extent = config.extent,
+							offset = {x = config.scissor.x or 0, y = config.scissor.y or 0},
+							extent = {
+								width = config.scissor.w or tonumber(config.extent.width),
+								height = config.scissor.h or tonumber(config.extent.height),
+							},
 						}
 					)
+					-- TODO: support more than one viewport/scissor
 					local viewportState = vk.Box(
 						vk.VkPipelineViewportStateCreateInfo,
 						{
@@ -1316,48 +1322,64 @@ do -- instance
 							pScissors = scissor,
 						}
 					)
+					config.rasterizer = config.rasterizer or {}
 					local rasterizer = vk.Box(
 						vk.VkPipelineRasterizationStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO",
-							depthClampEnable = 0,
-							rasterizerDiscardEnable = 0,
-							polygonMode = "VK_POLYGON_MODE_FILL",
-							lineWidth = 1.0,
-							cullMode = vk.VkCullModeFlagBits("VK_CULL_MODE_BACK_BIT"),
-							frontFace = "VK_FRONT_FACE_CLOCKWISE",
-							depthBiasEnable = 0,
+							depthClampEnable = config.rasterizer.depth_clamp or 0,
+							rasterizerDiscardEnable = config.rasterizer.discard or 0,
+							polygonMode = config.rasterizer.polygon_mode or "VK_POLYGON_MODE_FILL",
+							lineWidth = config.rasterizer.line_width or 1.0,
+							cullMode = config.rasterizer.cull_mode or vk.VkCullModeFlagBits("VK_CULL_MODE_BACK_BIT"),
+							frontFace = config.rasterizer.front_face or "VK_FRONT_FACE_CLOCKWISE",
+							depthBiasEnable = config.rasterizer.depth_bias or 0,
 						}
 					)
+					config.multisampling = config.multisampling or {}
 					local multisampling = vk.Box(
 						vk.VkPipelineMultisampleStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO",
-							sampleShadingEnable = 0,
-							rasterizationSamples = "VK_SAMPLE_COUNT_1_BIT",
+							sampleShadingEnable = config.multisampling.sample_shading or 0,
+							rasterizationSamples = config.multisampling.rasterization_samples or "VK_SAMPLE_COUNT_1_BIT",
 						}
 					)
-					local colorBlendAttachment = vk.Box(
-						vk.VkPipelineColorBlendAttachmentState,
-						{
-							colorWriteMask = bit.bor(
-								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_R_BIT"),
-								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_G_BIT"),
-								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_B_BIT"),
-								vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_A_BIT")
-							),
-							blendEnable = 0,
-						}
-					)
+					config.color_blend = config.color_blend or {}
+					config.color_blend.attachments = config.color_blend.attachments or {}
+					local colorBlendAttachments = {}
+
+					for i, color_blend_attachment in ipairs(config.color_blend.attachments) do
+						colorBlendAttachments[i] = vk.VkPipelineColorBlendAttachmentState(
+							{
+								colorWriteMask = color_blend_attachment.color_write_mask or
+									bit.bor(
+										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_R_BIT"),
+										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_G_BIT"),
+										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_B_BIT"),
+										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_A_BIT")
+									),
+								blendEnable = color_blend_attachment.blend or 0,
+							}
+						)
+					end
+
+					local colorBlendAttachment = vk.Array(vk.VkPipelineColorBlendAttachmentState)(#colorBlendAttachments)
+
+					-- Copy attachments to array
+					for i = 1, #colorBlendAttachments do
+						colorBlendAttachment[i - 1] = colorBlendAttachments[i]
+					end
+
 					local colorBlending = vk.Box(
 						vk.VkPipelineColorBlendStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO",
-							logicOpEnable = 0,
-							logicOp = "VK_LOGIC_OP_COPY",
-							attachmentCount = 1,
+							logicOpEnable = config.color_blend.logic_op_enabled or 0,
+							logicOp = config.color_blend.logic_op or "VK_LOGIC_OP_COPY",
+							attachmentCount = #colorBlendAttachments,
 							pAttachments = colorBlendAttachment,
-							blendConstants = {0.0, 0.0, 0.0, 0.0},
+							blendConstants = config.color_blend.constants or {0.0, 0.0, 0.0, 0.0},
 						}
 					)
 					local pipelineInfo = vk.Box(

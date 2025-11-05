@@ -253,6 +253,97 @@ function Renderer:WaitForIdle()
 	lib.vkDeviceWaitIdle(self.device.ptr[0])
 end
 
+do
+	local Pipeline = {}
+	Pipeline.__index = Pipeline
+
+	function Pipeline.New(renderer, config)
+		local self = setmetatable({}, Pipeline)
+		local uniformBuffers = {}
+
+		for i, uniform_config in ipairs(config.uniform_buffers) do
+			uniformBuffers[i] = renderer.device:CreateBuffer(
+				uniform_config.byte_size,
+				vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT"),
+				bit.bor(
+					vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT"),
+					vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT")
+				)
+			)
+
+			if uniform_config.initial_data then
+				uniformBuffers[i]:CopyData(uniform_config.initial_data, uniform_config.byte_size)
+			end
+		end
+
+		local renderPass = renderer:CreateRenderPass()
+		renderer:CreateImageViews()
+		renderer:CreateFramebuffers()
+		local layout = {}
+
+		for i, ub in ipairs(uniformBuffers) do
+			layout[i] = {
+				binding = i - 1,
+				type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+				stageFlags = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_" .. config.uniform_buffers[i].stage:upper() .. "_BIT"),
+				count = 1,
+			}
+		end
+
+		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
+		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
+		local descriptorPool = renderer.device:CreateDescriptorPool({{type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", count = #uniformBuffers}}, 1)
+		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
+
+		for i, ub in ipairs(uniformBuffers) do
+			renderer.device:UpdateDescriptorSet(descriptorSet, i - 1, ub)
+		end
+
+		local shader_modules = {}
+
+		for i, stage in ipairs(config.shader_stages) do
+			shader_modules[i] = {
+				type = stage.type,
+				module = renderer.device:CreateShaderModule(stage.code, stage.type),
+			}
+		end
+
+		pipeline = renderer.device:CreateGraphicsPipeline(
+			{
+				shaderModules = shader_modules,
+				pipelineLayout = pipelineLayout,
+				renderPass = renderPass,
+				extent = config.extent,
+				vertexBindings = config.vertex_bindings,
+				vertexAttributes = config.vertex_attributes,
+				input_assembly = config.input_assembly,
+				rasterizer = config.rasterizer,
+				viewport = config.viewport,
+				scissor = config.scissor,
+				multisampling = config.multisampling,
+				color_blend = config.color_blend,
+			}
+		)
+		self.pipeline = pipeline
+		self.vertex_buffers = config.vertex_buffers
+		self.descriptor_sets = {descriptorSet}
+		self.pipeline_layout = pipelineLayout
+		self.renderer = renderer
+		return self
+	end
+
+	function Renderer:CreatePipeline(...)
+		return Pipeline.New(self, ...)
+	end
+
+	function Pipeline:Bind(cmd)
+		local cmd = self.renderer:GetCommandBuffer()
+		cmd:BindPipeline(self.pipeline)
+		cmd:BindVertexBuffers(0, self.vertex_buffers)
+		cmd:BindDescriptorSets(self.pipeline_layout, self.descriptor_sets, 0)
+	end
+end
+
 function Renderer:PrintCapabilities()
 	print("Available surface formats (unique):")
 	local seen_formats = {}

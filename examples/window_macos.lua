@@ -1,5 +1,6 @@
 local cocoa = require("cocoa")
-local wnd = cocoa.window()wnd:Initialize()
+local wnd = cocoa.window()
+wnd:Initialize()
 wnd:OpenWindow()
 
 while true do
