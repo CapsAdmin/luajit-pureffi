@@ -147,16 +147,19 @@ void main() {
 }
 ]]
 
--- Random initialization helper
-local function initialize_random_state()
-	-- Create staging buffer with random data
+-- Storage images for ping-pong compute (Game of Life needs 2 images to read from one and write to the other)
+local storage_images = {}
+local storage_image_views = {}
+
+local function create_storage_images()
 	local extent = renderer:GetExtent()
 	local w = tonumber(extent.width)
 	local h = tonumber(extent.height)
 	local pixel_count = w * h
+	
+	-- Generate random initial state
 	local data = ffi.new("uint8_t[?]", pixel_count * 4)
 	math.randomseed(os.time())
-
 	for i = 0, pixel_count - 1 do
 		local alive = math.random() < 0.3
 		local value = alive and 255 or 0
@@ -165,128 +168,55 @@ local function initialize_random_state()
 		data[i * 4 + 2] = value
 		data[i * 4 + 3] = 255
 	end
-
-	return data, pixel_count, w, h
-end
-
-do
-	local ComputePipeline = {}
-	ComputePipeline.__index = ComputePipeline
-
-	function Renderer:CreateComputePipeline(config)
-		local shader = self.device:CreateShaderModule(config.shader, "compute")
-		-- Descriptor set layout for compute (2 storage images)
-		local descriptor_set_layout = self.device:CreateDescriptorSetLayout(config.descriptor_layout)
-		local pipeline_layout = self.device:CreatePipelineLayout({descriptor_set_layout})
-		local pipeline = self.device:CreateComputePipeline(shader, pipeline_layout)
-		-- Create descriptor pool for compute (2 sets, each with 2 storage images)
-		local descriptor_pool = self.device:CreateDescriptorPool(config.descriptor_pool, #config.descriptor_layout)
-		-- Create descriptor sets for ping-pong
-		local descriptor_sets = {}
-
-		for i = 1, #config.descriptor_layout do
-			descriptor_sets[i] = descriptor_pool:AllocateDescriptorSet(descriptor_set_layout)
-		end
-
-		return setmetatable(
-			{
-				shader = shader,
-				pipeline = pipeline,
-				pipeline_layout = pipeline_layout,
-				descriptor_set_layout = descriptor_set_layout,
-				descriptor_pool = descriptor_pool,
-				descriptor_sets = descriptor_sets,
-				current_image_index = 1,
-				config = config,
-			},
-			ComputePipeline
+	
+	-- Create 2 storage images for ping-pong
+	storage_images = {}
+	storage_image_views = {}
+	for i = 1, 2 do
+		local image = renderer.device:CreateImage(
+			w,
+			h,
+			"R8G8B8A8_UNORM",
+			{"storage", "transfer_dst", "transfer_src"},
+			"device_local"
 		)
-	end
-
-	function ComputePipeline:Update(data, pixel_count, w, h)
-		-- Create storage images for compute shader (ping-pong buffers)
-		self.storage_images = {}
-		self.storage_image_views = {}
-
-		for i = 1, #self.config.descriptor_layout do
-			local image = renderer.device:CreateImage(
-				w,
-				h,
-				"R8G8B8A8_UNORM",
-				{"storage", "transfer_dst", "transfer_src"},
-				"device_local"
-			)
-			renderer:UploadToImage(image, data, pixel_count, w, h)
-			self.storage_images[i] = image
-			self.storage_image_views[i] = image:CreateView()
-		end
-
-		-- Update descriptor sets with new storage image views
-		for i = 1, #self.config.descriptor_layout do
-			local input_idx = i
-			local output_idx = (i % 2) + 1
-			renderer.device:UpdateDescriptorSet(self.descriptor_sets[i], 0, self.storage_image_views[input_idx], "storage_image")
-			renderer.device:UpdateDescriptorSet(self.descriptor_sets[i], 1, self.storage_image_views[output_idx], "storage_image")
-		end
-	end
-
-	function ComputePipeline:Bind(cmd)
-		-- Bind compute pipeline
-		cmd:BindPipeline(self.pipeline, "compute")
-		cmd:BindDescriptorSets(
-			"compute",
-			self.pipeline_layout,
-			{self.descriptor_sets[self.current_image_index]},
-			0
-		)
-		local extent = renderer:GetExtent()
-		local w = tonumber(extent.width)
-		local h = tonumber(extent.height)
-		-- Dispatch compute shader
-		local group_count_x = math.ceil(w / WORKGROUP_SIZE)
-		local group_count_y = math.ceil(h / WORKGROUP_SIZE)
-		cmd:Dispatch(group_count_x, group_count_y, 1)
-		-- Barrier: compute write -> fragment read
-		cmd:PipelineBarrier(
-			{
-				srcStage = "compute",
-				dstStage = "fragment",
-				imageBarriers = {
-					{
-						image = self.storage_images[(self.current_image_index % 2) + 1],
-						srcAccessMask = "shader_write",
-						dstAccessMask = "shader_read",
-						oldLayout = "general",
-						newLayout = "general",
-					},
-				},
-			}
-		)
-		-- Swap images for next frame
-		self.current_image_index = (self.current_image_index % 2) + 1
+		renderer:UploadToImage(image, data, pixel_count, w, h)
+		storage_images[i] = image
+		storage_image_views[i] = image:CreateView()
 	end
 end
+
+create_storage_images()
 
 local compute_pipeline = renderer:CreateComputePipeline(
 	{
 		shader = COMPUTE_SHADER,
+		workgroup_size = WORKGROUP_SIZE,
+		descriptor_set_count = 2, -- 2 sets for ping-pong
 		descriptor_layout = {
-			{binding = 0, type = "storage_image", stageFlags = "compute", count = 1},
-			{binding = 1, type = "storage_image", stageFlags = "compute", count = 1},
+			{binding = 0, type = "storage_image", stageFlags = "compute", count = 1}, -- input
+			{binding = 1, type = "storage_image", stageFlags = "compute", count = 1}, -- output
 		},
 		descriptor_pool = {
-			{type = "storage_image", count = 4},
+			{type = "storage_image", count = 4}, -- 2 bindings * 2 sets
 		},
 	}
 )
-compute_pipeline:Update(initialize_random_state())
+
+-- Setup ping-pong descriptor sets
+-- Set 1: reads from image 1, writes to image 2
+compute_pipeline:UpdateDescriptorSet(1, 0, storage_image_views[1])
+compute_pipeline:UpdateDescriptorSet(1, 1, storage_image_views[2])
+-- Set 2: reads from image 2, writes to image 1
+compute_pipeline:UpdateDescriptorSet(2, 0, storage_image_views[2])
+compute_pipeline:UpdateDescriptorSet(2, 1, storage_image_views[1])
 
 local graphics_pipeline = renderer:CreatePipeline(
 	{
 		dynamic_states = {"viewport", "scissor"},
 		input_assembly = {topology = "triangle_list", primitive_restart = false},
 		storage_images = {
-			{stage = "fragment", image_view = compute_pipeline.storage_image_views[1]},
+			{stage = "fragment", image_view = storage_image_views[1]},
 		},
 		uniform_buffers = {
 			{
@@ -330,13 +260,19 @@ local graphics_pipeline = renderer:CreatePipeline(
 	}
 )
 
-
 function renderer:OnRecreateSwapchain()
-	compute_pipeline:Update(initialize_random_state())
-	graphics_pipeline:UpdateDescriptorSet(1, 0 , "storage_image", compute_pipeline.storage_image_views[1])
+	create_storage_images()
+	-- Update compute pipeline descriptor sets
+	compute_pipeline:UpdateDescriptorSet(1, 0, storage_image_views[1])
+	compute_pipeline:UpdateDescriptorSet(1, 1, storage_image_views[2])
+	compute_pipeline:UpdateDescriptorSet(2, 0, storage_image_views[2])
+	compute_pipeline:UpdateDescriptorSet(2, 1, storage_image_views[1])
+	-- Update graphics pipeline
+	graphics_pipeline:UpdateDescriptorSet(1, 0, "storage_image", storage_image_views[1])
 end
 
 wnd:Initialize()
+
 wnd:OpenWindow()
 -- Simulation state
 local paused = false
@@ -363,7 +299,14 @@ while true do
 			paused = not paused
 			print(paused and "Paused" or "Resumed")
 		elseif events.key == "r" or events.key == "R" then
-			initialize_random_state(renderer.device, storage_images[1], GAME_WIDTH, GAME_HEIGHT)
+			create_storage_images()
+			-- Update compute pipeline descriptor sets
+			compute_pipeline:UpdateDescriptorSet(1, 0, storage_image_views[1])
+			compute_pipeline:UpdateDescriptorSet(1, 1, storage_image_views[2])
+			compute_pipeline:UpdateDescriptorSet(2, 0, storage_image_views[2])
+			compute_pipeline:UpdateDescriptorSet(2, 1, storage_image_views[1])
+			-- Update graphics pipeline
+			graphics_pipeline:UpdateDescriptorSet(1, 0, "storage_image", storage_image_views[1])
 			print("Reset to random state")
 		end
 	end
@@ -372,7 +315,30 @@ while true do
 		local cmd = renderer:GetCommandBuffer()
 
 		-- Run compute shader (only if not paused)
-		if not paused then compute_pipeline:Bind(cmd) end
+		if not paused then 
+			compute_pipeline:Dispatch(cmd)
+			
+			-- Barrier: compute write -> fragment read
+			local output_image_idx = (compute_pipeline.current_image_index % 2) + 1
+			cmd:PipelineBarrier(
+				{
+					srcStage = "compute",
+					dstStage = "fragment",
+					imageBarriers = {
+						{
+							image = storage_images[output_image_idx],
+							srcAccessMask = "shader_write",
+							dstAccessMask = "shader_read",
+							oldLayout = "general",
+							newLayout = "general",
+						},
+					},
+				}
+			)
+			
+			-- Swap descriptor sets for next frame
+			compute_pipeline:SwapImages()
+		end
 
 		-- Update uniform buffer
 		time = time + 0.016
