@@ -1,28 +1,26 @@
 local ffi = require("ffi")
-local vulkan = require("helpers.vulkan")
-local vk = vulkan.vk
 local cocoa = require("cocoa")
 local threads = require("threads")
 local Renderer = require("helpers.renderer")
 local shaderc = require("shaderc")
 local wnd = cocoa.window()
-local vk = vulkan.vk
-local lib = vulkan.lib
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
-		present_mode = "VK_PRESENT_MODE_FIFO_KHR",
+		present_mode = "fifo",
 		image_count = nil, -- Use default (minImageCount + 1)
 		surface_format_index = 1,
-		composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR",
+		composite_alpha = "opaque",
 	}
 )
 local pipeline
 
 function renderer:OnRecreateSwapchain()
+	local extent = renderer:GetExtent()
+	local w = tonumber(extent.width)
+	local h = tonumber(extent.height)
 	-- Vertex data: position (vec2) + color (vec3) = 5 floats per vertex, 3 vertices
-	local vertices = ffi.new(
-		"float[15]",
+	local vertexBuffer = renderer:CreateVertexBuffer(
 		{
 			-- bottom-left (red)
 			0.0, -- x
@@ -44,61 +42,8 @@ function renderer:OnRecreateSwapchain()
 			1.0,
 		}
 	)
-	local bufferSize = ffi.sizeof(vertices)
-	vertexBuffer = renderer.device:CreateBuffer(
-		bufferSize,
-		vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_VERTEX_BUFFER_BIT"),
-		bit.bor(
-			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT"),
-			vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT")
-		)
-	)
-	vertexBuffer:CopyData(vertices, bufferSize)
 	pipeline = renderer:CreatePipeline(
 		{
-			input_assembly = {
-				topology = "triangle_list",
-				primitive_restart = 0,
-			},
-			viewport = {
-				x = 0.0,
-				y = 0.0,
-				w = tonumber(renderer:GetExtent().width),
-				h = tonumber(renderer:GetExtent().height),
-				min_depth = 0.0,
-				max_depth = 1.0,
-			},
-			scissor = {
-				x = 0,
-				y = 0,
-				w = tonumber(renderer:GetExtent().width),
-				h = tonumber(renderer:GetExtent().height),
-			},
-			rasterizer = {
-				depth_clamp = 0,
-				discard = 0,
-				polygon_mode = "fill",
-				line_width = 1.0,
-				cull_mode = "back",
-				front_face = "clockwise",
-				depth_bias = 0,
-			},
-			multisampling = {
-				sample_shading = 0,
-				rasterization_samples = "1",
-			},
-			color_blend = {
-				logic_op_enabled = 0,
-				logic_op = "copy",
-				constants = {0.0, 0.0, 0.0, 0.0},
-				attachments = {
-					{
-						blend = 0,
-						color_write_mask = {"r","g","b","a"}
-					}
-				}
-			},
-			extent = renderer:GetExtent(),
 			shader_stages = {
 				{
 					type = "vertex",
@@ -137,6 +82,55 @@ function renderer:OnRecreateSwapchain()
 						}
 					]],
 				},
+			},
+			input_assembly = {
+				topology = "triangle_list",
+				primitive_restart = false,
+			},
+			viewport = {
+				x = 0.0,
+				y = 0.0,
+				w = w,
+				h = h,
+				min_depth = 0.0,
+				max_depth = 1.0,
+			},
+			scissor = {
+				x = 0,
+				y = 0,
+				w = w,
+				h = h,
+			},
+			rasterizer = {
+				depth_clamp = false,
+				discard = false,
+				polygon_mode = "fill",
+				line_width = 1.0,
+				cull_mode = "back",
+				front_face = "clockwise",
+				depth_bias = 0,
+			},
+			multisampling = {
+				sample_shading = false,
+				rasterization_samples = "1",
+			},
+			color_blend = {
+				logic_op_enabled = false,
+				logic_op = "copy",
+				constants = {0.0, 0.0, 0.0, 0.0},
+				attachments = {
+					{
+						blend = false,
+						color_write_mask = {"r", "g", "b", "a"},
+					},
+				},
+			},
+			depth_stencil = {
+				depth_test = false,
+				depth_write = false,
+				depth_compare_op = "less",
+				depth_bounds_test = false,
+				stencil_test = false,
 			},
 			uniform_buffers = {
 				{
@@ -180,6 +174,30 @@ renderer:OnRecreateSwapchain()
 wnd:Initialize()
 wnd:OpenWindow()
 
+local function hsv_to_rgb(h, s, v)
+	local c = v * s
+	local x = c * (1 - math.abs((h * 6) % 2 - 1))
+	local m = v - c
+	local r, g, b
+	local h6 = h * 6
+
+	if h6 < 1 then
+		r, g, b = c, x, 0
+	elseif h6 < 2 then
+		r, g, b = x, c, 0
+	elseif h6 < 3 then
+		r, g, b = 0, c, x
+	elseif h6 < 4 then
+		r, g, b = 0, x, c
+	elseif h6 < 5 then
+		r, g, b = x, 0, c
+	else
+		r, g, b = c, 0, x
+	end
+
+	return r + m, g + m, b + m
+end
+
 while true do
 	local events = wnd:ReadEvents()
 
@@ -192,8 +210,10 @@ while true do
 	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
-		local cmd = renderer:BeginRenderPass({0.0, 0.0, 0.0, 1.0})
+		local cmd = renderer:BeginRenderPass({0.2, 0.2, 0.2, 1.0})
+		pipeline:UpdateUniformBuffer(1, ffi.new("float[4]", {hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)}))
 		pipeline:Bind(cmd)
+		pipeline:BindVertexBuffers(cmd, 0)
 		cmd:Draw(3, 1, 0, 0)
 		cmd:EndRenderPass()
 		renderer:EndFrame()

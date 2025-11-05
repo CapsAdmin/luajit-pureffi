@@ -9,10 +9,10 @@ local lib = vulkan.lib
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
-		present_mode = "VK_PRESENT_MODE_FIFO_KHR",
+		present_mode = "fifo",
 		image_count = nil, -- Use default (minImageCount + 1)
 		surface_format_index = 1,
-		composite_alpha = "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR",
+		composite_alpha = "opaque",
 	}
 )
 renderer:PrintCapabilities()

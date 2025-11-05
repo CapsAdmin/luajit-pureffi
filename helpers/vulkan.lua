@@ -6,6 +6,36 @@ local lib = vk.find_library()
 local vulkan = {}
 vulkan.vk = vk
 vulkan.lib = lib
+local enum_translator = require("helpers.enum_translator")
+
+local function translate_enums(enums)
+	local out = {}
+
+	for _, args in ipairs(enums) do
+		out[args[2]] = enum_translator(args[1], args[2], {unpack(args, 3)})
+	end
+
+	return out
+end
+
+local enums = translate_enums(
+	{
+		{vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", "_BIT"},
+		{vk.VkVertexInputRate, "VK_VERTEX_INPUT_RATE_"},
+		{vk.VkPrimitiveTopology, "VK_PRIMITIVE_TOPOLOGY_"},
+		{vk.VkColorComponentFlagBits, "VK_COLOR_COMPONENT_", "_BIT"},
+		{vk.VkPolygonMode, "VK_POLYGON_MODE_"},
+		{vk.VkCullModeFlagBits, "VK_CULL_MODE_", "_BIT"},
+		{vk.VkFrontFace, "VK_FRONT_FACE_"},
+		{vk.VkSampleCountFlagBits, "VK_SAMPLE_COUNT_", "_BIT"},
+		{vk.VkLogicOp, "VK_LOGIC_OP_"},
+		{vk.VkCompareOp, "VK_COMPARE_OP_"},
+		{vk.VkFormat, "VK_FORMAT_"},
+		{vk.VkPresentModeKHR, "VK_PRESENT_MODE_", "_KHR"},
+		{vk.VkCompositeAlphaFlagBitsKHR, "VK_COMPOSITE_ALPHA_", "_BIT_KHR"},
+		{vk.VkImageUsageFlagBits, "VK_IMAGE_USAGE_", "_BIT"},
+	}
+)
 
 local function vk_assert(result, msg)
 	if result ~= 0 then
@@ -445,15 +475,11 @@ do -- instance
 				function Device:CreateSwapchain(surface, surfaceFormat, surfaceCapabilities, config, old_swapchain)
 					config = config or {}
 					local imageCount = config.imageCount or surfaceCapabilities[0].minImageCount
-					local presentMode = config.presentMode or "VK_PRESENT_MODE_FIFO_KHR"
-					local compositeAlpha = config.compositeAlpha or "VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR"
+					local presentMode = enums.VK_PRESENT_MODE_(config.presentMode or "fifo")
+					local compositeAlpha = enums.VK_COMPOSITE_ALPHA_(config.compositeAlpha or "opaque")
 					local clipped = config.clipped ~= nil and (config.clipped and 1 or 0) or 1
 					local preTransform = config.preTransform or surfaceCapabilities[0].currentTransform
-					local imageUsage = config.imageUsage or
-						bit.bor(
-							vk.VkImageUsageFlagBits("VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT"),
-							vk.VkImageUsageFlagBits("VK_IMAGE_USAGE_TRANSFER_DST_BIT")
-						)
+					local imageUsage = enums.VK_IMAGE_USAGE_(config.imageUsage or {"color_attachment", "transfer_dst"})
 
 					-- Clamp image count to valid range
 					if imageCount < surfaceCapabilities[0].minImageCount then
@@ -881,7 +907,7 @@ do -- instance
 
 					for i, b in ipairs(bindings) do
 						bindingArray[i - 1].binding = b.binding or (i - 1)
-						bindingArray[i - 1].descriptorType = vk.VkDescriptorType(b.type or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER")
+						bindingArray[i - 1].descriptorType = vk.VkDescriptorType(b.type)
 						bindingArray[i - 1].descriptorCount = b.count or 1
 						bindingArray[i - 1].stageFlags = b.stageFlags or vk.VkShaderStageFlagBits("VK_SHADER_STAGE_FRAGMENT_BIT")
 						bindingArray[i - 1].pImmutableSamplers = nil
@@ -900,7 +926,7 @@ do -- instance
 						lib.vkCreateDescriptorSetLayout(self.ptr[0], layoutInfo, nil, ptr),
 						"failed to create descriptor set layout"
 					)
-					return setmetatable({ptr = ptr, device = self}, DescriptorSetLayout)
+					return setmetatable({ptr = ptr, device = self, bindingArray = bindingArray}, DescriptorSetLayout)
 				end
 
 				function DescriptorSetLayout:__gc()
@@ -935,7 +961,7 @@ do -- instance
 						lib.vkCreateDescriptorPool(self.ptr[0], poolInfo, nil, ptr),
 						"failed to create descriptor pool"
 					)
-					return setmetatable({ptr = ptr, device = self}, DescriptorPool)
+					return setmetatable({device = self, ptr = ptr, poolSizeArray = poolSizeArray}, DescriptorPool)
 				end
 
 				function DescriptorPool:AllocateDescriptorSet(layout)
@@ -1204,7 +1230,7 @@ do -- instance
 						lib.vkCreatePipelineLayout(self.ptr[0], pipelineLayoutInfo, nil, ptr),
 						"failed to create pipeline layout"
 					)
-					return setmetatable({ptr = ptr, device = self}, PipelineLayout)
+					return setmetatable({device = self, ptr = ptr}, PipelineLayout)
 				end
 
 				function PipelineLayout:__gc()
@@ -1215,30 +1241,8 @@ do -- instance
 			do -- graphics pipeline
 				local Pipeline = {}
 				Pipeline.__index = Pipeline
-				local enum_translator = require("helpers.enum_translator")
-				local function translate_enums(enums)
-					local out = {}
-					for _, args in ipairs(enums) do
-						out[args[2]] = enum_translator(args[1], args[2], {unpack(args, 3)})
-					end
-					return out
-				end
 
-				local enums = translate_enums({
-					{vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", "_BIT"},
-					{vk.VkVertexInputRate, "VK_VERTEX_INPUT_RATE_"},
-					{vk.VkPrimitiveTopology, "VK_PRIMITIVE_TOPOLOGY_"},
-					{vk.VkColorComponentFlagBits, "VK_COLOR_COMPONENT_", "_BIT"},
-					{vk.VkPolygonMode, "VK_POLYGON_MODE_"},
-					{vk.VkCullModeFlagBits, "VK_CULL_MODE_", "_BIT"},
-					{vk.VkFrontFace, "VK_FRONT_FACE_"},
-					{vk.VkSampleCountFlagBits, "VK_SAMPLE_COUNT_", "_BIT"},
-					{vk.VkLogicOp, "VK_LOGIC_OP_"},
-					{vk.VkFormat, "VK_FORMAT_"},
-				})
-
-				function Device:CreateGraphicsPipeline(config)
-					-- config should contain: vertShaderModule, fragShaderModule, pipelineLayout, renderPass, extent
+				function Device:CreateGraphicsPipeline(config, render_passes, pipelineLayout)
 					local stageArrayType = ffi.typeof("$ [" .. #config.shaderModules .. "]", vk.VkPipelineShaderStageCreateInfo)
 					local shaderStagesArray = ffi.new(stageArrayType)
 
@@ -1307,8 +1311,8 @@ do -- instance
 						{
 							x = config.viewport.x or 0.0,
 							y = config.viewport.y or 0.0,
-							width = config.viewport.w or tonumber(config.extent.width),
-							height = config.viewport.h or tonumber(config.extent.height),
+							width = config.viewport.w or 800,
+							height = config.viewport.h or 600,
 							minDepth = config.viewport.min_depth or 0.0,
 							maxDepth = config.viewport.max_depth or 1.0,
 						}
@@ -1319,8 +1323,8 @@ do -- instance
 						{
 							offset = {x = config.scissor.x or 0, y = config.scissor.y or 0},
 							extent = {
-								width = config.scissor.w or tonumber(config.extent.width),
-								height = config.scissor.h or tonumber(config.extent.height),
+								width = config.scissor.w or 800,
+								height = config.scissor.h or 600,
 							},
 						}
 					)
@@ -1365,10 +1369,7 @@ do -- instance
 					for i, color_blend_attachment in ipairs(config.color_blend.attachments) do
 						colorBlendAttachments[i] = vk.VkPipelineColorBlendAttachmentState(
 							{
-								colorWriteMask = enums.VK_COLOR_COMPONENT_(
-									color_blend_attachment.color_write_mask or
-										{"R", "G", "B", "A"}
-								),
+								colorWriteMask = enums.VK_COLOR_COMPONENT_(color_blend_attachment.color_write_mask or {"R", "G", "B", "A"}),
 								blendEnable = color_blend_attachment.blend or 0,
 							}
 						)
@@ -1392,23 +1393,43 @@ do -- instance
 							blendConstants = config.color_blend.constants or {0.0, 0.0, 0.0, 0.0},
 						}
 					)
+
+					config.depth_stencil = config.depth_stencil or {}
+					local depthStencilState = vk.Box(
+						vk.VkPipelineDepthStencilStateCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO",
+							depthTestEnable = config.depth_stencil.depth_test or 0,
+							depthWriteEnable = config.depth_stencil.depth_write or 0,
+							depthCompareOp = enums.VK_COMPARE_OP_(
+								config.depth_stencil.depth_compare_op or "less"
+							),
+							depthBoundsTestEnable = config.depth_stencil.depth_bounds_test or 0,
+							stencilTestEnable = config.depth_stencil.stencil_test or 0,
+						}
+					)
+
+					if render_passes[2] or (config.subpass and config.subpass ~= 0) then
+						error("multiple render passes not supported yet")
+					end
+
 					local pipelineInfo = vk.Box(
 						vk.VkGraphicsPipelineCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO",
-							stageCount = 2,
+							stageCount = #config.shaderModules,
 							pStages = shaderStagesArray,
 							pVertexInputState = vertexInputInfo,
 							pInputAssemblyState = inputAssembly,
 							pViewportState = viewportState,
 							pRasterizationState = rasterizer,
 							pMultisampleState = multisampling,
-							pDepthStencilState = nil,
+							pDepthStencilState = depthStencilState,
 							pColorBlendState = colorBlending,
 							pDynamicState = nil,
-							layout = config.pipelineLayout.ptr[0],
-							renderPass = config.renderPass.ptr[0],
-							subpass = 0,
+							layout = pipelineLayout.ptr[0],
+							renderPass = render_passes[1].ptr[0],
+							subpass = config.subpass or 0,
 							basePipelineHandle = nil,
 							basePipelineIndex = -1,
 						}
@@ -1418,7 +1439,7 @@ do -- instance
 						lib.vkCreateGraphicsPipelines(self.ptr[0], nil, 1, pipelineInfo, nil, ptr),
 						"failed to create graphics pipeline"
 					)
-					return setmetatable({ptr = ptr, device = self, config = config}, Pipeline)
+					return setmetatable({device = self, ptr = ptr, config = config}, Pipeline)
 				end
 
 				function Pipeline:__gc()

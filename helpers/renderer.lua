@@ -5,6 +5,28 @@ local vk = vulkan.vk
 local lib = vulkan.lib
 local Renderer = {}
 Renderer.__index = Renderer
+
+local enum_translator = require("helpers.enum_translator")
+
+local function translate_enums(enums)
+	local out = {}
+
+	for _, args in ipairs(enums) do
+		out[args[2]] = enum_translator(args[1], args[2], {unpack(args, 3)})
+	end
+
+	return out
+end
+
+
+local enums = translate_enums(
+	{
+		{vk.VkBufferUsageFlagBits, "VK_BUFFER_USAGE_", "_BIT"},
+		{vk.VkMemoryPropertyFlagBits, "VK_MEMORY_PROPERTY_", "_BIT"},
+		{vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", "_BIT"},
+	}
+)
+
 -- Default configuration
 local default_config = {
 	-- Swapchain settings
@@ -259,21 +281,17 @@ do
 
 	function Pipeline.New(renderer, config)
 		local self = setmetatable({}, Pipeline)
-		local uniformBuffers = {}
+		local uniform_buffers = {}
 
 		for i, uniform_config in ipairs(config.uniform_buffers) do
-			uniformBuffers[i] = renderer.device:CreateBuffer(
-				uniform_config.byte_size,
-				vk.VkBufferUsageFlagBits("VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT"),
-				bit.bor(
-					vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT"),
-					vk.VkMemoryPropertyFlagBits("VK_MEMORY_PROPERTY_HOST_COHERENT_BIT")
-				)
+			uniform_buffers[i] = renderer:CreateBuffer(
+				{
+					byte_size = uniform_config.byte_size,
+					data = uniform_config.initial_data,
+					data_type = uniform_config.data_type,
+					buffer_usage = "uniform_buffer",
+				}
 			)
-
-			if uniform_config.initial_data then
-				uniformBuffers[i]:CopyData(uniform_config.initial_data, uniform_config.byte_size)
-			end
 		end
 
 		local renderPass = renderer:CreateRenderPass()
@@ -281,21 +299,24 @@ do
 		renderer:CreateFramebuffers()
 		local layout = {}
 
-		for i, ub in ipairs(uniformBuffers) do
+		for i, ub in ipairs(uniform_buffers) do
 			layout[i] = {
 				binding = i - 1,
 				type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
-				stageFlags = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_" .. config.uniform_buffers[i].stage:upper() .. "_BIT"),
+				stageFlags = enums.VK_SHADER_STAGE_(config.uniform_buffers[i].stage),
 				count = 1,
 			}
 		end
 
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
-		local descriptorPool = renderer.device:CreateDescriptorPool({{type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER", count = #uniformBuffers}}, 1)
+		local descriptorPool = renderer.device:CreateDescriptorPool({{
+			type = "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+			count = #uniform_buffers,
+		}}, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
 
-		for i, ub in ipairs(uniformBuffers) do
+		for i, ub in ipairs(uniform_buffers) do
 			renderer.device:UpdateDescriptorSet(descriptorSet, i - 1, ub)
 		end
 
@@ -311,8 +332,6 @@ do
 		pipeline = renderer.device:CreateGraphicsPipeline(
 			{
 				shaderModules = shader_modules,
-				pipelineLayout = pipelineLayout,
-				renderPass = renderPass,
 				extent = config.extent,
 				vertexBindings = config.vertex_bindings,
 				vertexAttributes = config.vertex_attributes,
@@ -322,26 +341,75 @@ do
 				scissor = config.scissor,
 				multisampling = config.multisampling,
 				color_blend = config.color_blend,
-			}
+			}, {renderPass}, pipelineLayout
 		)
 		self.pipeline = pipeline
 		self.vertex_buffers = config.vertex_buffers
 		self.descriptor_sets = {descriptorSet}
 		self.pipeline_layout = pipelineLayout
 		self.renderer = renderer
+		self.config = config
+		self.uniform_buffers = uniform_buffers
+		self.descriptorSetLayout = descriptorSetLayout
+		self.descriptorPool = descriptorPool
+
 		return self
+	end
+
+	function Pipeline:UpdateUniformBuffer(index, data)
+		if index < 1 or index > #self.uniform_buffers then
+			error("Invalid uniform buffer index: " .. index)
+		end
+
+		local ub = self.uniform_buffers[index]
+		ub:CopyData(data, ub.byte_size)
 	end
 
 	function Renderer:CreatePipeline(...)
 		return Pipeline.New(self, ...)
 	end
 
+	function Pipeline:BindVertexBuffers(cmd, index)
+		cmd:BindVertexBuffers(0, self.vertex_buffers)
+	end
+
 	function Pipeline:Bind(cmd)
 		local cmd = self.renderer:GetCommandBuffer()
 		cmd:BindPipeline(self.pipeline)
-		cmd:BindVertexBuffers(0, self.vertex_buffers)
 		cmd:BindDescriptorSets(self.pipeline_layout, self.descriptor_sets, 0)
 	end
+end
+
+function Renderer:CreateBuffer(config)
+	local byte_size
+	local data = config.data
+
+	if data then
+		if type(data) == "table" then
+			data = ffi.new((config.data_type or "float") .. "[" .. (#data) .. "]", data)
+			byte_size = ffi.sizeof(data)
+		else
+			byte_size = config.byte_size or ffi.sizeof(data)
+		end
+	end
+
+	local buffer = self.device:CreateBuffer(
+		byte_size,
+		enums.VK_BUFFER_USAGE_(config.buffer_usage),
+		enums.VK_MEMORY_PROPERTY_(config.memory_property or {"host_visible", "host_coherent"})
+	)
+
+	if data then buffer:CopyData(data, byte_size) end
+
+	return buffer
+end
+
+function Renderer:CreateVertexBuffer(tbl)
+	return self:CreateBuffer({
+		data = tbl,
+		data_type = "float",
+		buffer_usage = "vertex_buffer",
+	})
 end
 
 function Renderer:PrintCapabilities()
