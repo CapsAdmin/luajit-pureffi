@@ -279,19 +279,9 @@ local compute_pipeline = renderer:CreateComputePipeline(
 		},
 	}
 )
+compute_pipeline:Update(initialize_random_state())
 
-local graphics_pipeline
-
-function renderer:OnRecreateSwapchain()
-	compute_pipeline:Update(initialize_random_state())
-	if graphics_pipeline then
-		graphics_pipeline:UpdateDescriptorSet(1, 0 , "storage_image", compute_pipeline.storage_image_views[1])
-	end
-end
-
-renderer:OnRecreateSwapchain()
-
-graphics_pipeline = renderer:CreatePipeline(
+local graphics_pipeline = renderer:CreatePipeline(
 	{
 		dynamic_states = {"viewport", "scissor"},
 		input_assembly = {topology = "triangle_list", primitive_restart = false},
@@ -339,6 +329,13 @@ graphics_pipeline = renderer:CreatePipeline(
 		},
 	}
 )
+
+
+function renderer:OnRecreateSwapchain()
+	compute_pipeline:Update(initialize_random_state())
+	graphics_pipeline:UpdateDescriptorSet(1, 0 , "storage_image", compute_pipeline.storage_image_views[1])
+end
+
 wnd:Initialize()
 wnd:OpenWindow()
 -- Simulation state
