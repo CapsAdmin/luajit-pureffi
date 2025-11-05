@@ -16,94 +16,93 @@ local renderer = Renderer.New(
 local RGBA = ffi.typeof("float[4]")
 local pipeline
 local VERTEX_BIND_POSITION = 0
-
-function renderer:OnRecreateSwapchain()
-	local extent = renderer:GetExtent()
-	local w = tonumber(extent.width)
-	local h = tonumber(extent.height)
-	-- Vertex data: position (vec2) + color (vec3) = 5 floats per vertex, 3 vertices
-	local vertex_buffer = renderer:CreateBuffer(
-		{
-			buffer_usage = "vertex_buffer",
-			data_type = "float",
-			data = {
-				-- bottom-left (red)
-				0.0, -- x
-				-0.5, -- y
-				1.0, -- r
-				0.0, -- g
-				0.0, -- b
-				-- top (blue)
-				0.5,
-				0.5,
-				0.0,
-				1.0,
-				0.0,
-				-- bottom-right (green)
-				-0.5,
-				0.5,
-				0.0,
-				0.0,
-				1.0,
+local vertex_buffer = renderer:CreateBuffer(
+	{
+		buffer_usage = "vertex_buffer",
+		data_type = "float",
+		data = {
+			-- bottom-left (red)
+			0.0, -- x
+			-0.5, -- y
+			1.0, -- r
+			0.0, -- g
+			0.0, -- b
+			-- top (blue)
+			0.5,
+			0.5,
+			0.0,
+			1.0,
+			0.0,
+			-- bottom-right (green)
+			-0.5,
+			0.5,
+			0.0,
+			0.0,
+			1.0,
+		},
+	}
+)
+-- Create pipeline once at startup with dynamic viewport/scissor
+local extent = renderer:GetExtent()
+local pipeline = renderer:CreatePipeline(
+	{
+		-- Initial viewport/scissor (can be ignored since we're using dynamic state)
+		viewport = {
+			x = 0.0,
+			y = 0.0,
+			w = extent.width,
+			h = extent.height,
+			min_depth = 0.0,
+			max_depth = 1.0,
+		},
+		scissor = {
+			x = 0,
+			y = 0,
+			w = extent.width,
+			h = extent.height,
+		},
+		-- Enable dynamic viewport and scissor
+		dynamic_states = {"viewport", "scissor"},
+		input_assembly = {
+			topology = "triangle_list",
+			primitive_restart = false,
+		},
+		vertex_bindings = {
+			{
+				binding = VERTEX_BIND_POSITION,
+				stride = ffi.sizeof("float") * 5, -- vec2 + vec3
+				input_rate = "vertex",
 			},
-		}
-	)
-	pipeline = renderer:CreatePipeline(
-		{
-			viewport = {
-				x = 0.0,
-				y = 0.0,
-				w = w,
-				h = h,
-				min_depth = 0.0,
-				max_depth = 1.0,
+		},
+		vertex_attributes = {
+			{
+				binding = VERTEX_BIND_POSITION,
+				location = 0, -- in_position
+				format = "R32G32_SFLOAT", -- vec2
+				offset = 0,
 			},
-			scissor = {
-				x = 0,
-				y = 0,
-				w = w,
-				h = h,
+			{
+				binding = VERTEX_BIND_POSITION,
+				location = 1, -- in_color
+				format = "R32G32B32_SFLOAT", -- vec3
+				offset = ffi.sizeof("float") * 2,
 			},
-			input_assembly = {
-				topology = "triangle_list",
-				primitive_restart = false,
+		},
+		vertex_buffers = {vertex_buffer},
+		uniform_buffers = {
+			{
+				stage = "fragment",
+				initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
 			},
-			vertex_bindings = {
-				{
-					binding = VERTEX_BIND_POSITION,
-					stride = ffi.sizeof("float") * 5, -- vec2 + vec3
-					input_rate = "vertex",
-				},
+			{
+				stage = "fragment",
+				initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
 			},
-			vertex_attributes = {
-				{
-					binding = VERTEX_BIND_POSITION,
-					location = 0, -- in_position
-					format = "R32G32_SFLOAT", -- vec2
-					offset = 0,
-				},
-				{
-					binding = VERTEX_BIND_POSITION,
-					location = 1, -- in_color
-					format = "R32G32B32_SFLOAT", -- vec3
-					offset = ffi.sizeof("float") * 2,
-				},
-			},
-			vertex_buffers = {vertex_buffer},
-			uniform_buffers = {
-				{
-					stage = "fragment",
-					initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
-				},
-				{
-					stage = "fragment",
-					initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
-				},
-			},
-			shader_stages = {
-				{
-					type = "vertex",
-					code = [[
+		},
+		shader_stages = {
+			{
+				type = "vertex",
+				code = [[
 						#version 450
 
 						layout(location = 0) in vec2 in_position;
@@ -116,10 +115,10 @@ function renderer:OnRecreateSwapchain()
 							frag_color = in_color;
 						}
 					]],
-				},
-				{
-					type = "fragment",
-					code = [[
+			},
+			{
+				type = "fragment",
+				code = [[
 						#version 450
 
 						layout(binding = 0) uniform ColorUniform1 {
@@ -140,44 +139,41 @@ function renderer:OnRecreateSwapchain()
 							out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier;
 						}
 					]],
+			},
+		},
+		rasterizer = {
+			depth_clamp = false,
+			discard = false,
+			polygon_mode = "fill",
+			line_width = 1.0,
+			cull_mode = "back",
+			front_face = "clockwise",
+			depth_bias = 0,
+		},
+		color_blend = {
+			logic_op_enabled = false,
+			logic_op = "copy",
+			constants = {0.0, 0.0, 0.0, 0.0},
+			attachments = {
+				{
+					blend = false,
+					color_write_mask = {"r", "g", "b", "a"},
 				},
 			},
-			rasterizer = {
-				depth_clamp = false,
-				discard = false,
-				polygon_mode = "fill",
-				line_width = 1.0,
-				cull_mode = "back",
-				front_face = "clockwise",
-				depth_bias = 0,
-			},
-			color_blend = {
-				logic_op_enabled = false,
-				logic_op = "copy",
-				constants = {0.0, 0.0, 0.0, 0.0},
-				attachments = {
-					{
-						blend = false,
-						color_write_mask = {"r", "g", "b", "a"},
-					},
-				},
-			},
-			multisampling = {
-				sample_shading = false,
-				rasterization_samples = "1",
-			},
-			depth_stencil = {
-				depth_test = false,
-				depth_write = false,
-				depth_compare_op = "less",
-				depth_bounds_test = false,
-				stencil_test = false,
-			},
-		}
-	)
-end
-
-renderer:OnRecreateSwapchain()
+		},
+		multisampling = {
+			sample_shading = false,
+			rasterization_samples = "1",
+		},
+		depth_stencil = {
+			depth_test = false,
+			depth_write = false,
+			depth_compare_op = "less",
+			depth_bounds_test = false,
+			stencil_test = false,
+		},
+	}
+)
 wnd:Initialize()
 wnd:OpenWindow()
 
@@ -220,6 +216,10 @@ while true do
 		local cmd = renderer:BeginRenderPass(RGBA(0.2, 0.2, 0.2, 1.0))
 		pipeline:UpdateUniformBuffer(1, RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
 		pipeline:Bind(cmd)
+		-- Set dynamic viewport and scissor based on current extent
+		local extent = renderer:GetExtent()
+		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
+		cmd:SetScissor(0, 0, extent.width, extent.height)
 		pipeline:BindVertexBuffers(cmd, VERTEX_BIND_POSITION)
 		cmd:Draw(3, 1, 0, 0)
 		cmd:EndRenderPass()

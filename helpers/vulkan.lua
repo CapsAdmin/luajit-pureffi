@@ -43,6 +43,7 @@ local enums = translate_enums(
 		{vk.VkAccessFlagBits, "VK_ACCESS_", "_BIT"},
 		{vk.VkImageLayout, "VK_IMAGE_LAYOUT_"},
 		{vk.VkPipelineBindPoint, "VK_PIPELINE_BIND_POINT_"},
+		{vk.VkDynamicState, "VK_DYNAMIC_STATE_"},
 	}
 )
 -- Export enums for use in applications
@@ -840,6 +841,32 @@ do -- instance
 							firstVertex or 0,
 							firstInstance or 0
 						)
+					end
+
+					function CommandBuffer:SetViewport(x, y, width, height, minDepth, maxDepth)
+						local viewport = vk.Box(
+							vk.VkViewport,
+							{
+								x = x or 0.0,
+								y = y or 0.0,
+								width = width,
+								height = height,
+								minDepth = minDepth or 0.0,
+								maxDepth = maxDepth or 1.0,
+							}
+						)
+						lib.vkCmdSetViewport(self.ptr[0], 0, 1, viewport)
+					end
+
+					function CommandBuffer:SetScissor(x, y, width, height)
+						local scissor = vk.Box(
+							vk.VkRect2D,
+							{
+								offset = {x = x or 0, y = y or 0},
+								extent = {width = width, height = height},
+							}
+						)
+						lib.vkCmdSetScissor(self.ptr[0], 0, 1, scissor)
 					end
 
 					function CommandBuffer:ClearColorImage(config)
@@ -1715,6 +1742,24 @@ do -- instance
 						}
 					)
 
+					-- Dynamic state configuration
+					local dynamicStateInfo = nil
+					if config.dynamic_states then
+						local dynamicStateCount = #config.dynamic_states
+						local dynamicStateArray = vk.Array(vk.VkDynamicState)(dynamicStateCount)
+						for i, state in ipairs(config.dynamic_states) do
+							dynamicStateArray[i - 1] = enums.VK_DYNAMIC_STATE_(state)
+						end
+						dynamicStateInfo = vk.Box(
+							vk.VkPipelineDynamicStateCreateInfo,
+							{
+								sType = "VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO",
+								dynamicStateCount = dynamicStateCount,
+								pDynamicStates = dynamicStateArray,
+							}
+						)
+					end
+
 					if render_passes[2] or (config.subpass and config.subpass ~= 0) then
 						error("multiple render passes not supported yet")
 					end
@@ -1732,7 +1777,7 @@ do -- instance
 							pMultisampleState = multisampling,
 							pDepthStencilState = depthStencilState,
 							pColorBlendState = colorBlending,
-							pDynamicState = nil,
+							pDynamicState = dynamicStateInfo,
 							layout = pipelineLayout.ptr[0],
 							renderPass = render_passes[1].ptr[0],
 							subpass = config.subpass or 0,

@@ -375,6 +375,7 @@ do
 				scissor = config.scissor,
 				multisampling = config.multisampling,
 				color_blend = config.color_blend,
+				dynamic_states = config.dynamic_states,
 			}, {renderPass}, pipelineLayout
 		)
 		self.pipeline = pipeline
