@@ -365,6 +365,15 @@ do
 		ub:CopyData(data, ub.byte_size)
 	end
 
+	function Pipeline:UpdateVertexBuffer(index, data)
+		if index < 1 or index > #self.vertex_buffers then
+			error("Invalid vertex buffer index: " .. index)
+		end
+
+		local vb = self.vertex_buffers[index]
+		vb:CopyData(data, vb.byte_size)
+	end
+
 	function Renderer:CreatePipeline(...)
 		return Pipeline.New(self, ...)
 	end

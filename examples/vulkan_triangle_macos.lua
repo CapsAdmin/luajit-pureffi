@@ -13,14 +13,16 @@ local renderer = Renderer.New(
 		composite_alpha = "opaque",
 	}
 )
+local RGBA = ffi.typeof("float[4]")
 local pipeline
+local VERTEX_BIND_POSITION = 0
 
 function renderer:OnRecreateSwapchain()
 	local extent = renderer:GetExtent()
 	local w = tonumber(extent.width)
 	local h = tonumber(extent.height)
 	-- Vertex data: position (vec2) + color (vec3) = 5 floats per vertex, 3 vertices
-	local vertexBuffer = renderer:CreateVertexBuffer(
+	local vertex_buffer = renderer:CreateVertexBuffer(
 		{
 			-- bottom-left (red)
 			0.0, -- x
@@ -44,49 +46,6 @@ function renderer:OnRecreateSwapchain()
 	)
 	pipeline = renderer:CreatePipeline(
 		{
-			shader_stages = {
-				{
-					type = "vertex",
-					code = [[
-						#version 450
-
-						layout(location = 0) in vec2 inPosition;
-						layout(location = 1) in vec3 inColor;
-
-						layout(location = 0) out vec3 fragColor;
-
-						void main() {
-							gl_Position = vec4(inPosition, 0.0, 1.0);
-							fragColor = inColor;
-						}
-					]],
-				},
-				{
-					type = "fragment",
-					code = [[
-						#version 450
-
-						layout(binding = 0) uniform ColorUniform {
-							vec4 colorMultiplier;
-						} ubo;
-
-						layout(binding = 1) uniform ColorUniform2 {
-							vec4 colorMultiplier;
-						} ubo2;
-
-						layout(location = 0) in vec3 fragColor;
-						layout(location = 0) out vec4 outColor;
-
-						void main() {
-							outColor = vec4(fragColor, 1.0) * ubo.colorMultiplier * ubo2.colorMultiplier;
-						}
-					]],
-				},
-			},
-			input_assembly = {
-				topology = "triangle_list",
-				primitive_restart = false,
-			},
 			viewport = {
 				x = 0.0,
 				y = 0.0,
@@ -101,6 +60,84 @@ function renderer:OnRecreateSwapchain()
 				w = w,
 				h = h,
 			},
+			input_assembly = {
+				topology = "triangle_list",
+				primitive_restart = false,
+			},
+			vertex_bindings = {
+				{
+					binding = VERTEX_BIND_POSITION,
+					stride = ffi.sizeof("float") * 5, -- vec2 + vec3
+					input_rate = "vertex",
+				},
+			},
+			vertex_attributes = {
+				{
+					binding = VERTEX_BIND_POSITION,
+					location = 0, -- in_position
+					format = "R32G32_SFLOAT", -- vec2
+					offset = 0,
+				},
+				{
+					binding = VERTEX_BIND_POSITION,
+					location = 1, -- in_color
+					format = "R32G32B32_SFLOAT", -- vec3
+					offset = ffi.sizeof("float") * 2,
+				},
+			},
+			vertex_buffers = {vertex_buffer},
+			uniform_buffers = {
+				{
+					stage = "fragment",
+					initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
+				},
+				{
+					stage = "fragment",
+					initial_data = RGBA(1.0, 1.0, 1.0, 1.0),
+				},
+			},
+			shader_stages = {
+				{
+					type = "vertex",
+					code = [[
+						#version 450
+
+						layout(location = 0) in vec2 in_position;
+						layout(location = 1) in vec3 in_color;
+						
+						layout(location = 0) out vec3 frag_color;
+
+						void main() {
+							gl_Position = vec4(in_position, 0.0, 1.0);
+							frag_color = in_color;
+						}
+					]],
+				},
+				{
+					type = "fragment",
+					code = [[
+						#version 450
+
+						layout(binding = 0) uniform ColorUniform1 {
+							vec4 color_multiplier;
+						} ubo1;
+
+						layout(binding = 1) uniform ColorUniform2 {
+							vec4 color_multiplier;
+						} ubo2;
+
+						// from vertex shader
+						layout(location = 0) in vec3 frag_color;
+
+						// output color
+						layout(location = 0) out vec4 out_color;
+
+						void main() {
+							out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier;
+						}
+					]],
+				},
+			},
 			rasterizer = {
 				depth_clamp = false,
 				discard = false,
@@ -109,10 +146,6 @@ function renderer:OnRecreateSwapchain()
 				cull_mode = "back",
 				front_face = "clockwise",
 				depth_bias = 0,
-			},
-			multisampling = {
-				sample_shading = false,
-				rasterization_samples = "1",
 			},
 			color_blend = {
 				logic_op_enabled = false,
@@ -125,6 +158,10 @@ function renderer:OnRecreateSwapchain()
 					},
 				},
 			},
+			multisampling = {
+				sample_shading = false,
+				rasterization_samples = "1",
+			},
 			depth_stencil = {
 				depth_test = false,
 				depth_write = false,
@@ -132,40 +169,6 @@ function renderer:OnRecreateSwapchain()
 				depth_bounds_test = false,
 				stencil_test = false,
 			},
-			uniform_buffers = {
-				{
-					stage = "fragment",
-					byte_size = ffi.sizeof("float") * 4,
-					initial_data = ffi.new("float[4]", {1.0, 1.0, 1.0, 1.0}),
-				},
-				{
-					stage = "fragment",
-					byte_size = ffi.sizeof("float") * 4,
-					initial_data = ffi.new("float[4]", {1.0, 1.0, 1.0, 1.0}),
-				},
-			},
-			vertex_bindings = {
-				{
-					binding = 0,
-					stride = ffi.sizeof("float") * 5, -- vec2 + vec3
-					input_rate = "vertex",
-				},
-			},
-			vertex_attributes = {
-				{
-					location = 0,
-					binding = 0,
-					format = "R32G32_SFLOAT", -- vec2
-					offset = 0,
-				},
-				{
-					location = 1,
-					binding = 0,
-					format = "R32G32B32_SFLOAT", -- vec3
-					offset = ffi.sizeof("float") * 2,
-				},
-			},
-			vertex_buffers = {vertexBuffer},
 		}
 	)
 end
@@ -210,10 +213,10 @@ while true do
 	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
-		local cmd = renderer:BeginRenderPass({0.2, 0.2, 0.2, 1.0})
-		pipeline:UpdateUniformBuffer(1, ffi.new("float[4]", {hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)}))
+		local cmd = renderer:BeginRenderPass(RGBA(0.2, 0.2, 0.2, 1.0))
+		pipeline:UpdateUniformBuffer(1, RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
 		pipeline:Bind(cmd)
-		pipeline:BindVertexBuffers(cmd, 0)
+		pipeline:BindVertexBuffers(cmd, VERTEX_BIND_POSITION)
 		cmd:Draw(3, 1, 0, 0)
 		cmd:EndRenderPass()
 		renderer:EndFrame()
