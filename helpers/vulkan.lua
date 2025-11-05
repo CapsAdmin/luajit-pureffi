@@ -40,8 +40,13 @@ local enums = translate_enums(
 		{vk.VkDescriptorType, "VK_DESCRIPTOR_TYPE_"},
 		{vk.VkColorSpaceKHR, "VK_COLOR_SPACE_"},
 		{vk.VkImageAspectFlagBits, "VK_IMAGE_ASPECT_", "_BIT"},
+		{vk.VkAccessFlagBits, "VK_ACCESS_", "_BIT"},
+		{vk.VkImageLayout, "VK_IMAGE_LAYOUT_"},
 	}
 )
+
+-- Export enums for use in applications
+vulkan.enums = enums
 
 local function vk_assert(result, msg)
 	if result ~= 0 then
@@ -471,6 +476,22 @@ do -- instance
 						lib.vkQueueSubmit(self.ptr[0], 1, submitInfo, inFlightFence.ptr[0]),
 						"failed to submit queue"
 					)
+				end
+
+				function Queue:SubmitAndWait(device, commandBuffer, fence)
+					lib.vkResetFences(device.ptr[0], 1, fence.ptr)
+
+					local submitInfo = vk.Box(vk.VkSubmitInfo, {
+						sType = "VK_STRUCTURE_TYPE_SUBMIT_INFO",
+						commandBufferCount = 1,
+						pCommandBuffers = commandBuffer.ptr,
+					})
+
+					vk_assert(
+						lib.vkQueueSubmit(self.ptr[0], 1, submitInfo, fence.ptr[0]),
+						"failed to submit queue"
+					)
+					lib.vkWaitForFences(device.ptr[0], 1, fence.ptr, 1, ffi.cast("uint64_t", -1))
 				end
 			end
 
@@ -909,8 +930,8 @@ do -- instance
 									sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
 									srcAccessMask = barrier.srcAccessMask or 0,
 									dstAccessMask = barrier.dstAccessMask or 0,
-									oldLayout = barrier.oldLayout or "VK_IMAGE_LAYOUT_UNDEFINED",
-									newLayout = barrier.newLayout or "VK_IMAGE_LAYOUT_GENERAL",
+									oldLayout = enums.VK_IMAGE_LAYOUT_(barrier.oldLayout or "undefined"),
+									newLayout = enums.VK_IMAGE_LAYOUT_(barrier.newLayout or "general"),
 									srcQueueFamilyIndex = 0xFFFFFFFF,
 									dstQueueFamilyIndex = 0xFFFFFFFF,
 									image = barrier.image,
@@ -961,6 +982,31 @@ do -- instance
 							srcImage,
 							"VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL",
 							dstImage,
+							"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+							1,
+							region
+						)
+					end
+
+					function CommandBuffer:CopyBufferToImage(buffer, image, width, height)
+						local region = vk.Box(vk.VkBufferImageCopy, {
+							bufferOffset = 0,
+							bufferRowLength = 0,
+							bufferImageHeight = 0,
+							imageSubresource = {
+								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+								mipLevel = 0,
+								baseArrayLayer = 0,
+								layerCount = 1,
+							},
+							imageOffset = {x = 0, y = 0, z = 0},
+							imageExtent = {width = width, height = height, depth = 1},
+						})
+
+						lib.vkCmdCopyBufferToImage(
+							self.ptr[0],
+							buffer.ptr[0],
+							image.ptr[0],
 							"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
 							1,
 							region
@@ -1146,7 +1192,16 @@ do -- instance
 			end
 
 			function Device:UpdateDescriptorSet(descriptorSet, binding, resource, descriptorType)
-				descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER"
+				-- Accept both friendly names and VK_ constants for backwards compatibility
+				local isStorageImage = false
+				if descriptorType and not descriptorType:match("^VK_") then
+					isStorageImage = descriptorType == "storage_image"
+					descriptorType = enums.VK_DESCRIPTOR_TYPE_(descriptorType)
+				else
+					descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER"
+					isStorageImage = descriptorType == "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
+				end
+
 				local descriptorWrite = vk.Box(
 					vk.VkWriteDescriptorSet,
 					{
@@ -1159,7 +1214,7 @@ do -- instance
 					}
 				)
 
-				if descriptorType == "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE" then
+				if isStorageImage then
 					local imageInfo = vk.Box(
 						vk.VkDescriptorImageInfo,
 						{

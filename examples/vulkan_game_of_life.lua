@@ -3,8 +3,6 @@ local cocoa = require("cocoa")
 local threads = require("threads")
 local Renderer = require("helpers.renderer")
 local vulkan = require("helpers.vulkan")
-local vk = vulkan.vk
-local lib = vulkan.lib
 
 -- Create window
 local wnd = cocoa.window()
@@ -208,35 +206,14 @@ local function initialize_random_state(device, image, width, height)
 		imageBarriers = {{
 			image = image.ptr[0],
 			srcAccessMask = 0,
-			dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_TRANSFER_WRITE_BIT"),
-			oldLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
-			newLayout = "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+			dstAccessMask = vulkan.enums.VK_ACCESS_("transfer_write"),
+			oldLayout = "undefined",
+			newLayout = "transfer_dst_optimal",
 		}},
 	})
 
 	-- Copy buffer to image
-	local region = vk.Box(vk.VkBufferImageCopy, {
-		bufferOffset = 0,
-		bufferRowLength = 0,
-		bufferImageHeight = 0,
-		imageSubresource = {
-			aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-			mipLevel = 0,
-			baseArrayLayer = 0,
-			layerCount = 1,
-		},
-		imageOffset = {x = 0, y = 0, z = 0},
-		imageExtent = {width = width, height = height, depth = 1},
-	})
-
-	lib.vkCmdCopyBufferToImage(
-		cmd.ptr[0],
-		staging_buffer.ptr[0],
-		image.ptr[0],
-		"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
-		1,
-		region
-	)
+	cmd:CopyBufferToImage(staging_buffer, image, width, height)
 
 	-- Transition to general layout for compute
 	cmd:PipelineBarrier({
@@ -244,10 +221,10 @@ local function initialize_random_state(device, image, width, height)
 		dstStage = "compute",
 		imageBarriers = {{
 			image = image.ptr[0],
-			srcAccessMask = vk.VkAccessFlagBits("VK_ACCESS_TRANSFER_WRITE_BIT"),
-			dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_SHADER_READ_BIT"),
-			oldLayout = "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
-			newLayout = "VK_IMAGE_LAYOUT_GENERAL",
+			srcAccessMask = vulkan.enums.VK_ACCESS_("transfer_write"),
+			dstAccessMask = vulkan.enums.VK_ACCESS_("shader_read"),
+			oldLayout = "transfer_dst_optimal",
+			newLayout = "general",
 		}},
 	})
 
@@ -255,21 +232,11 @@ local function initialize_random_state(device, image, width, height)
 
 	-- Submit and wait
 	local fence = device:CreateFence()
-	lib.vkResetFences(device.ptr[0], 1, fence.ptr)
-
-	local submitInfo = vk.Box(vk.VkSubmitInfo, {
-		sType = "VK_STRUCTURE_TYPE_SUBMIT_INFO",
-		commandBufferCount = 1,
-		pCommandBuffers = cmd.ptr,
-	})
-
-	lib.vkQueueSubmit(renderer.queue.ptr[0], 1, submitInfo, fence.ptr[0])
-	lib.vkWaitForFences(device.ptr[0], 1, fence.ptr, 1, ffi.cast("uint64_t", -1))
+	renderer.queue:SubmitAndWait(device, cmd, fence)
 end
 
 function renderer:OnRecreateSwapchain()
 	local is_first_call = storage_images == nil or #storage_images == 0
-	local old_storage_images = storage_images
 
 	-- Set simulation size based on window dimensions
 	local extent = self:GetExtent()
@@ -327,8 +294,8 @@ function renderer:OnRecreateSwapchain()
 		local input_idx = i
 		local output_idx = (i % 2) + 1
 
-		self.device:UpdateDescriptorSet(compute_descriptor_sets[i], 0, storage_image_views[input_idx], "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE")
-		self.device:UpdateDescriptorSet(compute_descriptor_sets[i], 1, storage_image_views[output_idx], "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE")
+		self.device:UpdateDescriptorSet(compute_descriptor_sets[i], 0, storage_image_views[input_idx], "storage_image")
+		self.device:UpdateDescriptorSet(compute_descriptor_sets[i], 1, storage_image_views[output_idx], "storage_image")
 	end
 
 	-- Create uniform buffer for graphics shader (only on first call)
@@ -457,10 +424,10 @@ while true do
 				dstStage = "fragment",
 				imageBarriers = {{
 					image = storage_images[(current_image_index % 2) + 1].ptr[0],
-					srcAccessMask = vk.VkAccessFlagBits("VK_ACCESS_SHADER_WRITE_BIT"),
-					dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_SHADER_READ_BIT"),
-					oldLayout = "VK_IMAGE_LAYOUT_GENERAL",
-					newLayout = "VK_IMAGE_LAYOUT_GENERAL",
+					srcAccessMask = vulkan.enums.VK_ACCESS_("shader_write"),
+					dstAccessMask = vulkan.enums.VK_ACCESS_("shader_read"),
+					oldLayout = "general",
+					newLayout = "general",
 				}},
 			})
 
