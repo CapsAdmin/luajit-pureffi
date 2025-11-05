@@ -1,7 +1,6 @@
 local ffi = require("ffi")
 local setmetatable = require("helpers.setmetatable_gc")
 local vulkan = require("helpers.vulkan")
-local vk = vulkan.vk
 local Renderer = {}
 Renderer.__index = Renderer
 
