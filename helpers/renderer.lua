@@ -261,41 +261,98 @@ do
 		local self = setmetatable({}, Pipeline)
 		local uniform_buffers = {}
 
-		for i, uniform_config in ipairs(config.uniform_buffers) do
-			uniform_buffers[i] = renderer:CreateBuffer(
-				{
-					byte_size = uniform_config.byte_size,
-					data = uniform_config.initial_data,
-					data_type = uniform_config.data_type,
-					buffer_usage = "uniform_buffer",
-				}
-			)
+		-- Handle legacy uniform_buffers config
+		if config.uniform_buffers then
+			for i, uniform_config in ipairs(config.uniform_buffers) do
+				uniform_buffers[i] = renderer:CreateBuffer(
+					{
+						byte_size = uniform_config.byte_size,
+						data = uniform_config.initial_data,
+						data_type = uniform_config.data_type,
+						buffer_usage = "uniform_buffer",
+					}
+				)
+			end
 		end
 
 		local renderPass = renderer:CreateRenderPass()
 		renderer:CreateImageViews()
 		renderer:CreateFramebuffers()
 		local layout = {}
+		local pool_sizes = {}
+		local binding_index = 0
 
-		for i, ub in ipairs(uniform_buffers) do
-			layout[i] = {
-				binding = i - 1,
-				type = "uniform_buffer",
-				stageFlags = config.uniform_buffers[i].stage,
-				count = 1,
-			}
+		-- Add storage images to layout
+		if config.storage_images then
+			for i, img_config in ipairs(config.storage_images) do
+				layout[binding_index + 1] = {
+					binding = binding_index,
+					type = "storage_image",
+					stageFlags = img_config.stage,
+					count = 1,
+				}
+				binding_index = binding_index + 1
+			end
+			table.insert(pool_sizes, {type = "storage_image", count = #config.storage_images})
+		end
+
+		-- Add uniform buffers to layout
+		if config.uniform_buffers_graphics then
+			for i, ub_config in ipairs(config.uniform_buffers_graphics) do
+				layout[binding_index + 1] = {
+					binding = binding_index,
+					type = "uniform_buffer",
+					stageFlags = ub_config.stage,
+					count = 1,
+				}
+				binding_index = binding_index + 1
+			end
+			table.insert(pool_sizes, {type = "uniform_buffer", count = #config.uniform_buffers_graphics})
+		elseif config.uniform_buffers then
+			for i, ub in ipairs(uniform_buffers) do
+				layout[binding_index + 1] = {
+					binding = binding_index,
+					type = "uniform_buffer",
+					stageFlags = config.uniform_buffers[i].stage,
+					count = 1,
+				}
+				binding_index = binding_index + 1
+			end
+			table.insert(pool_sizes, {type = "uniform_buffer", count = #uniform_buffers})
 		end
 
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
-		local descriptorPool = renderer.device:CreateDescriptorPool({{
-			type = "uniform_buffer",
-			count = #uniform_buffers,
-		}}, 1)
+		local descriptorPool = renderer.device:CreateDescriptorPool(pool_sizes, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
 
-		for i, ub in ipairs(uniform_buffers) do
-			renderer.device:UpdateDescriptorSet(descriptorSet, i - 1, ub)
+		-- Update descriptor sets
+		binding_index = 0
+
+		-- Bind storage images
+		if config.storage_images then
+			for i, img_config in ipairs(config.storage_images) do
+				renderer.device:UpdateDescriptorSet(
+					descriptorSet,
+					binding_index,
+					img_config.image_view,
+					"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
+				)
+				binding_index = binding_index + 1
+			end
+		end
+
+		-- Bind uniform buffers
+		if config.uniform_buffers_graphics then
+			for i, ub_config in ipairs(config.uniform_buffers_graphics) do
+				renderer.device:UpdateDescriptorSet(descriptorSet, binding_index, ub_config.buffer)
+				binding_index = binding_index + 1
+			end
+		elseif config.uniform_buffers then
+			for i, ub in ipairs(uniform_buffers) do
+				renderer.device:UpdateDescriptorSet(descriptorSet, binding_index, ub)
+				binding_index = binding_index + 1
+			end
 		end
 
 		local shader_modules = {}

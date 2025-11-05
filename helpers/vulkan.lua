@@ -846,6 +846,126 @@ do -- instance
 							range
 						)
 					end
+
+					function CommandBuffer:BindComputePipeline(pipeline)
+						lib.vkCmdBindPipeline(
+							self.ptr[0],
+							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_COMPUTE"),
+							pipeline.ptr[0]
+						)
+					end
+
+					function CommandBuffer:BindComputeDescriptorSets(pipelineLayout, descriptorSets, firstSet)
+						local setCount = #descriptorSets
+						local setArray = vk.Array(vk.VkDescriptorSet)(setCount)
+
+						for i, ds in ipairs(descriptorSets) do
+							setArray[i - 1] = ds.ptr[0]
+						end
+
+						lib.vkCmdBindDescriptorSets(
+							self.ptr[0],
+							vk.VkPipelineBindPoint("VK_PIPELINE_BIND_POINT_COMPUTE"),
+							pipelineLayout.ptr[0],
+							firstSet or 0,
+							setCount,
+							setArray,
+							0,
+							nil
+						)
+					end
+
+					function CommandBuffer:Dispatch(groupCountX, groupCountY, groupCountZ)
+						lib.vkCmdDispatch(
+							self.ptr[0],
+							groupCountX or 1,
+							groupCountY or 1,
+							groupCountZ or 1
+						)
+					end
+
+					function CommandBuffer:PipelineBarrier(config)
+						-- Map stage names to pipeline stage flags
+						local stage_map = {
+							compute = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT"),
+							fragment = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT"),
+							transfer = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_TRANSFER_BIT"),
+							vertex = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_VERTEX_SHADER_BIT"),
+							all_commands = vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_ALL_COMMANDS_BIT"),
+						}
+
+						local srcStage = stage_map[config.srcStage or "compute"]
+						local dstStage = stage_map[config.dstStage or "fragment"]
+
+						local imageBarriers = nil
+						local imageBarrierCount = 0
+
+						if config.imageBarriers then
+							imageBarrierCount = #config.imageBarriers
+							imageBarriers = vk.Array(vk.VkImageMemoryBarrier)(imageBarrierCount)
+
+							for i, barrier in ipairs(config.imageBarriers) do
+								imageBarriers[i - 1] = vk.VkImageMemoryBarrier({
+									sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
+									srcAccessMask = barrier.srcAccessMask or 0,
+									dstAccessMask = barrier.dstAccessMask or 0,
+									oldLayout = barrier.oldLayout or "VK_IMAGE_LAYOUT_UNDEFINED",
+									newLayout = barrier.newLayout or "VK_IMAGE_LAYOUT_GENERAL",
+									srcQueueFamilyIndex = 0xFFFFFFFF,
+									dstQueueFamilyIndex = 0xFFFFFFFF,
+									image = barrier.image,
+									subresourceRange = {
+										aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+										baseMipLevel = 0,
+										levelCount = 1,
+										baseArrayLayer = 0,
+										layerCount = 1,
+									},
+								})
+							end
+						end
+
+						lib.vkCmdPipelineBarrier(
+							self.ptr[0],
+							srcStage,
+							dstStage,
+							0,
+							0, nil,
+							0, nil,
+							imageBarrierCount,
+							imageBarriers
+						)
+					end
+
+					function CommandBuffer:CopyImageToImage(srcImage, dstImage, width, height)
+						local region = vk.Box(vk.VkImageCopy, {
+							srcSubresource = {
+								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+								mipLevel = 0,
+								baseArrayLayer = 0,
+								layerCount = 1,
+							},
+							srcOffset = {x = 0, y = 0, z = 0},
+							dstSubresource = {
+								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
+								mipLevel = 0,
+								baseArrayLayer = 0,
+								layerCount = 1,
+							},
+							dstOffset = {x = 0, y = 0, z = 0},
+							extent = {width = width, height = height, depth = 1},
+						})
+
+						lib.vkCmdCopyImage(
+							self.ptr[0],
+							srcImage,
+							"VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL",
+							dstImage,
+							"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
+							1,
+							region
+						)
+					end
 				end
 			end
 
@@ -1025,15 +1145,8 @@ do -- instance
 				end
 			end
 
-			function Device:UpdateDescriptorSet(descriptorSet, binding, buffer, descriptorType)
-				local bufferInfo = vk.Box(
-					vk.VkDescriptorBufferInfo,
-					{
-						buffer = buffer.ptr[0],
-						offset = 0,
-						range = buffer.size,
-					}
-				)
+			function Device:UpdateDescriptorSet(descriptorSet, binding, resource, descriptorType)
+				descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER"
 				local descriptorWrite = vk.Box(
 					vk.VkWriteDescriptorSet,
 					{
@@ -1041,11 +1154,33 @@ do -- instance
 						dstSet = descriptorSet.ptr[0],
 						dstBinding = binding or 0,
 						dstArrayElement = 0,
-						descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER",
+						descriptorType = descriptorType,
 						descriptorCount = 1,
-						pBufferInfo = bufferInfo,
 					}
 				)
+
+				if descriptorType == "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE" then
+					local imageInfo = vk.Box(
+						vk.VkDescriptorImageInfo,
+						{
+							sampler = nil,
+							imageView = resource.ptr[0],
+							imageLayout = "VK_IMAGE_LAYOUT_GENERAL",
+						}
+					)
+					descriptorWrite[0].pImageInfo = imageInfo
+				else
+					local bufferInfo = vk.Box(
+						vk.VkDescriptorBufferInfo,
+						{
+							buffer = resource.ptr[0],
+							offset = 0,
+							range = resource.size,
+						}
+					)
+					descriptorWrite[0].pBufferInfo = bufferInfo
+				end
+
 				lib.vkUpdateDescriptorSets(self.ptr[0], 1, descriptorWrite, 0, nil)
 			end
 
@@ -1234,6 +1369,80 @@ do -- instance
 				end
 			end
 
+			do -- image
+				local Image = {}
+				Image.__index = Image
+
+				function Device:CreateImage(width, height, format, usage, properties)
+					local imageInfo = vk.Box(
+						vk.VkImageCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO",
+							imageType = "VK_IMAGE_TYPE_2D",
+							format = enums.VK_FORMAT_(format),
+							extent = {
+								width = width,
+								height = height,
+								depth = 1,
+							},
+							mipLevels = 1,
+							arrayLayers = 1,
+							samples = "VK_SAMPLE_COUNT_1_BIT",
+							tiling = "VK_IMAGE_TILING_OPTIMAL",
+							usage = enums.VK_IMAGE_USAGE_(usage),
+							sharingMode = "VK_SHARING_MODE_EXCLUSIVE",
+							initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
+						}
+					)
+					local image_ptr = vk.Box(vk.VkImage)()
+					vk_assert(
+						lib.vkCreateImage(self.ptr[0], imageInfo, nil, image_ptr),
+						"failed to create image"
+					)
+
+					local memRequirements = vk.Box(vk.VkMemoryRequirements)()
+					lib.vkGetImageMemoryRequirements(self.ptr[0], image_ptr[0], memRequirements)
+
+					properties = enums.VK_MEMORY_PROPERTY_(properties or "device_local")
+
+					local allocInfo = vk.Box(
+						vk.VkMemoryAllocateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO",
+							allocationSize = memRequirements[0].size,
+							memoryTypeIndex = self:FindMemoryType(memRequirements[0].memoryTypeBits, properties),
+						}
+					)
+					local memory_ptr = vk.Box(vk.VkDeviceMemory)()
+					vk_assert(
+						lib.vkAllocateMemory(self.ptr[0], allocInfo, nil, memory_ptr),
+						"failed to allocate image memory"
+					)
+					lib.vkBindImageMemory(self.ptr[0], image_ptr[0], memory_ptr[0], 0)
+
+					return setmetatable(
+						{
+							ptr = image_ptr,
+							memory = memory_ptr,
+							device = self,
+							width = width,
+							height = height,
+							format = format,
+						},
+						Image
+					)
+				end
+
+				function Image:CreateView()
+					return self.device:CreateImageView(self.ptr[0], self.format)
+				end
+
+				function Image:__gc()
+					lib.vkDestroyImage(self.device.ptr[0], self.ptr[0], nil)
+					lib.vkFreeMemory(self.device.ptr[0], self.memory[0], nil)
+				end
+			end
+
 			do -- pipeline layout
 				local PipelineLayout = {}
 				PipelineLayout.__index = PipelineLayout
@@ -1273,6 +1482,43 @@ do -- instance
 
 				function PipelineLayout:__gc()
 					lib.vkDestroyPipelineLayout(self.device.ptr[0], self.ptr[0], nil)
+				end
+			end
+
+			do -- compute pipeline
+				local ComputePipeline = {}
+				ComputePipeline.__index = ComputePipeline
+
+				function Device:CreateComputePipeline(shaderModule, pipelineLayout)
+					local computeShaderStageInfo = vk.Box(
+						vk.VkPipelineShaderStageCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
+							stage = enums.VK_SHADER_STAGE_("compute"),
+							module = shaderModule.ptr[0],
+							pName = "main",
+						}
+					)
+					local computePipelineCreateInfo = vk.Box(
+						vk.VkComputePipelineCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO",
+							stage = computeShaderStageInfo[0],
+							layout = pipelineLayout.ptr[0],
+							basePipelineHandle = nil,
+							basePipelineIndex = -1,
+						}
+					)
+					local ptr = vk.Box(vk.VkPipeline)()
+					vk_assert(
+						lib.vkCreateComputePipelines(self.ptr[0], nil, 1, computePipelineCreateInfo, nil, ptr),
+						"failed to create compute pipeline"
+					)
+					return setmetatable({device = self, ptr = ptr}, ComputePipeline)
+				end
+
+				function ComputePipeline:__gc()
+					lib.vkDestroyPipeline(self.device.ptr[0], self.ptr[0], nil)
 				end
 			end
 

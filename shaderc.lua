@@ -69,8 +69,12 @@ ffi.cdef[[
 
     // Enums for shader kind and compilation status
     typedef enum {
-        shaderc_glsl_vertex_shader,
-        shaderc_glsl_fragment_shader,
+        shaderc_glsl_vertex_shader = 0,
+        shaderc_glsl_fragment_shader = 1,
+        shaderc_glsl_compute_shader = 2,
+        shaderc_glsl_geometry_shader = 3,
+        shaderc_glsl_tess_control_shader = 4,
+        shaderc_glsl_tess_evaluation_shader = 5,
         // ... other shader types
     } shaderc_shader_kind;
 
@@ -130,6 +134,14 @@ function mod.compile(source, shader_type, entry_point)
 		shader_kind = ffi.C.shaderc_glsl_vertex_shader
 	elseif shader_type == "fragment" or shader_type == "frag" then
 		shader_kind = ffi.C.shaderc_glsl_fragment_shader
+	elseif shader_type == "compute" or shader_type == "comp" then
+		shader_kind = ffi.C.shaderc_glsl_compute_shader
+	elseif shader_type == "geometry" or shader_type == "geom" then
+		shader_kind = ffi.C.shaderc_glsl_geometry_shader
+	elseif shader_type == "tess_control" or shader_type == "tesc" then
+		shader_kind = ffi.C.shaderc_glsl_tess_control_shader
+	elseif shader_type == "tess_evaluation" or shader_type == "tese" then
+		shader_kind = ffi.C.shaderc_glsl_tess_evaluation_shader
 	else
 		-- Default to vertex shader if not specified or use as filename
 		shader_kind = ffi.C.shaderc_glsl_vertex_shader
