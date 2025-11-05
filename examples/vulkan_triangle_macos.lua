@@ -94,12 +94,7 @@ function renderer:OnRecreateSwapchain()
 				attachments = {
 					{
 						blend = 0,
-						color_write_mask = bit.bor(
-							vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_R_BIT"),
-							vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_G_BIT"),
-							vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_B_BIT"),
-							vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_A_BIT")
-						),
+						color_write_mask = {"r","g","b","a"}
 					}
 				}
 			},

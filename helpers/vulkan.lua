@@ -1215,14 +1215,11 @@ do -- instance
 			do -- graphics pipeline
 				local Pipeline = {}
 				Pipeline.__index = Pipeline
-
-				local function to_enum()
-
-				end
-
-				local function to_bit_flag()
-
-				end
+				local enum_translator = require("helpers.enum_translator")
+				local VkShaderStageFlagBits = enum_translator(vk.VkShaderStageFlagBits, "VK_SHADER_STAGE_", {"_BIT"})
+				local VkVertexInputRate = enum_translator(vk.VkVertexInputRate, "VK_VERTEX_INPUT_RATE_")
+				local VkPrimitiveTopology = enum_translator(vk.VkPrimitiveTopology, "VK_PRIMITIVE_TOPOLOGY_")
+				local VkColorComponentFlagBits = enum_translator(vk.VkColorComponentFlagBits, "VK_COLOR_COMPONENT_", {"_BIT"})
 
 				function Device:CreateGraphicsPipeline(config)
 					-- config should contain: vertShaderModule, fragShaderModule, pipelineLayout, renderPass, extent
@@ -1233,7 +1230,7 @@ do -- instance
 						shaderStagesArray[i - 1] = vk.VkPipelineShaderStageCreateInfo(
 							{
 								sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
-								stage = vk.VkShaderStageFlagBits("VK_SHADER_STAGE_" .. stage.type:upper() .. "_BIT"),
+								stage = VkShaderStageFlagBits(stage.type),
 								module = stage.module.ptr[0],
 								pName = "main",
 							}
@@ -1253,7 +1250,7 @@ do -- instance
 						for i, binding in ipairs(config.vertexBindings) do
 							bindingArray[i - 1].binding = binding.binding or (i - 1)
 							bindingArray[i - 1].stride = binding.stride
-							bindingArray[i - 1].inputRate = vk.VkVertexInputRate(binding.inputRate or "VK_VERTEX_INPUT_RATE_VERTEX")
+							bindingArray[i - 1].inputRate = VkVertexInputRate(binding.inputRate or "vertex")
 						end
 					end
 
@@ -1284,7 +1281,7 @@ do -- instance
 						vk.VkPipelineInputAssemblyStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO",
-							topology = config.input_assembly.topology or "VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST",
+							topology = VkPrimitiveTopology(config.input_assembly.topology or "triangle_list"),
 							primitiveRestartEnable = config.input_assembly.primitive_restart or 0,
 						}
 					)
@@ -1352,13 +1349,10 @@ do -- instance
 					for i, color_blend_attachment in ipairs(config.color_blend.attachments) do
 						colorBlendAttachments[i] = vk.VkPipelineColorBlendAttachmentState(
 							{
-								colorWriteMask = color_blend_attachment.color_write_mask or
-									bit.bor(
-										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_R_BIT"),
-										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_G_BIT"),
-										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_B_BIT"),
-										vk.VkColorComponentFlagBits("VK_COLOR_COMPONENT_A_BIT")
-									),
+								colorWriteMask = VkColorComponentFlagBits(
+									color_blend_attachment.color_write_mask or
+										{"R", "G", "B", "A"}
+								),
 								blendEnable = color_blend_attachment.blend or 0,
 							}
 						)
