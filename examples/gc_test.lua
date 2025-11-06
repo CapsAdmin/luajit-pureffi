@@ -1,4 +1,4 @@
 local setmetatable = require("helpers.setmetatable_gc")
 local obj = setmetatable({}, {__gc = function(o)
-    print("Garbage collected!")
+    print("garbage collected")
 end})
