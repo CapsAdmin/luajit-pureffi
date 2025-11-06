@@ -280,21 +280,26 @@ print("  ESC: Exit")
 while true do
 	local events = wnd:ReadEvents()
 
-	if events.window_close_requested then break end
+	for _, event in ipairs(events) do
+		if event.type == "window_close" or (event.type == "key_press" and event.key == "escape") then
+			renderer:WaitForIdle()
+			os.exit()
+		end
 
-	if events.window_resized then renderer:RecreateSwapchain() end
+		if event.type == "window_resize" then 
+			renderer:RecreateSwapchain() 
+		end
 
-	-- Handle keyboard input
-	if events.key_pressed then
-		if events.key == "escape" then
-			break
-		elseif events.key == " " then
-			paused = not paused
-			print(paused and "Paused" or "Resumed")
-		elseif events.key == "r" or events.key == "R" then
-			create_storage_images()
-			renderer:OnRecreateSwapchain()
-			print("Reset to random state")
+		-- Handle keyboard input
+		if event.type == "key_press" then
+			if event.key == "space" then
+				paused = not paused
+				print(paused and "Paused" or "Resumed")
+			elseif event.key == "r" then
+				create_storage_images()
+				renderer:OnRecreateSwapchain()
+				print("Reset to random state")
+			end
 		end
 	end
 
@@ -350,5 +355,3 @@ while true do
 
 	threads.sleep(16)
 end
-
-renderer:WaitForIdle()

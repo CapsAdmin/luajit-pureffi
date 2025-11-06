@@ -6,11 +6,22 @@ wnd:OpenWindow()
 while true do
 	local events = wnd:ReadEvents()
 
-	if events.window_close_requested then
-		print("Window close requested")
+	for _, event in ipairs(events) do
+		if event.type == "window_close" then
+			print("Window close requested")
+			os.exit()
+		end
 
-		break
+		if event.type == "window_resize" then 
+			print("window resize:", event.width, "x", event.height) 
+		end
+		
+		if event.type == "key_press" then
+			print("key pressed:", event.key, event.char or "")
+		end
+		
+		if event.type == "mouse_button" then
+			print("mouse button:", event.action, event.button, "at", event.x, event.y)
+		end
 	end
-
-	if events.window_resized then print("window resize") end
 end

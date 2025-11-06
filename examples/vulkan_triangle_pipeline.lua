@@ -199,13 +199,16 @@ end
 while true do
 	local events = wnd:ReadEvents()
 
-	if events.window_close_requested then
-		print("close")
+	for _, event in ipairs(events) do
+		if event.type == "window_close" then
+			renderer:WaitForIdle()
+			os.exit()
+		end
 
-		break
+		if event.type == "window_resize" then 
+			renderer:RecreateSwapchain() 
+		end
 	end
-
-	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
 		local cmd = renderer:BeginRenderPass(RGBA(0.2, 0.2, 0.2, 1.0))
@@ -222,5 +225,3 @@ while true do
 
 	threads.sleep(1)
 end
-
-renderer:WaitForIdle()

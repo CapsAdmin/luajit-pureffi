@@ -43,13 +43,16 @@ end
 while true do
 	local events = wnd:ReadEvents()
 
-	if events.window_close_requested then
-		print("Window close requested")
+	for _, event in ipairs(events) do
+		if event.type == "window_close" then
+			renderer:WaitForIdle()
+			os.exit()
+		end
 
-		break
+		if event.type == "window_resize" then 
+			renderer:RecreateSwapchain() 
+		end
 	end
-
-	if events.window_resized then renderer:RecreateSwapchain() end
 
 	if renderer:BeginFrame() then
 		renderer:GetCommandBuffer():ClearColorImage({
@@ -62,5 +65,3 @@ while true do
 	frame = frame + 0.01
 	threads.sleep(1)
 end
-
-renderer:WaitForIdle()
