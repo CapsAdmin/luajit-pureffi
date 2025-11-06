@@ -1,7 +1,9 @@
 local ffi = require("ffi")
 local vk = require("vk")
+local T = require("helpers.ffi_types")
+local enum_to_string = require("helpers.enum_translator").enum_to_string
 local lib = vk.find_library()
-local appInfo = vk.Box(
+local appInfo = T.Box(
 	vk.VkApplicationInfo,
 	{
 		sType = "VK_STRUCTURE_TYPE_APPLICATION_INFO",
@@ -12,7 +14,7 @@ local appInfo = vk.Box(
 		apiVersion = vk.VK_API_VERSION_1_0,
 	}
 )
-local createInfo = vk.Box(
+local createInfo = T.Box(
 	vk.VkInstanceCreateInfo,
 	{
 		sType = "VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO",
@@ -25,25 +27,25 @@ local createInfo = vk.Box(
 		ppEnabledExtensionNames = nil,
 	}
 )
-local instance = vk.Box(vk.VkInstance)()
+local instance = T.Box(vk.VkInstance)()
 local result = lib.vkCreateInstance(createInfo, nil, instance)
 
 if result ~= 0 then
-	error("failed to create vulkan instance: " .. vk.EnumToString(result))
+	error("failed to create vulkan instance: " .. enum_to_string(result))
 end
 
-print("vulkan instance created successfully: " .. vk.EnumToString(result))
+print("vulkan instance created successfully: " .. enum_to_string(result))
 local deviceCount = ffi.new("uint32_t[1]", 0)
 result = lib.vkEnumeratePhysicalDevices(instance[0], deviceCount, nil)
 
 if result ~= 0 or deviceCount[0] == 0 then error("devices found") end
 
 print(string.format("found %d physical device(s)", deviceCount[0]))
-local devices = vk.Array(vk.VkPhysicalDevice)(deviceCount[0])
+local devices = T.Array(vk.VkPhysicalDevice)(deviceCount[0])
 result = lib.vkEnumeratePhysicalDevices(instance[0], deviceCount, devices)
 
 for i = 0, deviceCount[0] - 1 do
-	local properties = vk.Box(vk.VkPhysicalDeviceProperties)()
+	local properties = T.Box(vk.VkPhysicalDeviceProperties)()
 	lib.vkGetPhysicalDeviceProperties(devices[i], properties)
 	local props = properties[0]
 	-- Decode API version (major.minor.patch)
@@ -61,7 +63,7 @@ for i = 0, deviceCount[0] - 1 do
 	print(string.format("  driver version: 0x%08X", props.driverVersion))
 	print(string.format("  vendor id: 0x%04X", props.vendorID))
 	print(string.format("  device id: 0x%04X", props.deviceID))
-	print(string.format("  device type: %s", vk.EnumToString(props.deviceType)))
+	print(string.format("  device type: %s", enum_to_string(props.deviceType)))
 	-- Print some limits
 	local limits = props.limits
 	print(string.format("  max image dimension 2D: %d", tonumber(limits.maxImageDimension2D)))

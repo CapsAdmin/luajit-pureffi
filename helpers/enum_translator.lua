@@ -14,9 +14,7 @@ local function get_enums(enum_type)
 		-- bug?
 		if current_index == nil then current_index = -1 end
 
-		if CT_code == 11 then
-			out[sib_ctype.name] = current_index
-		end
+		if CT_code == 11 then out[sib_ctype.name] = current_index end
 
 		sib = sib_ctype.sib
 	end
@@ -45,7 +43,8 @@ local function build_translator(ctype, starts_with, strip)
 			friendly_translate[friendly:lower()] = num
 			friendly_translate_rev[num] = friendly:lower()
 		end
-        translate[enum:lower()] = num
+
+		translate[enum:lower()] = num
 	end
 
 	local function to_enum(str)
@@ -74,12 +73,15 @@ local function build_translator(ctype, starts_with, strip)
 		{
 			to_string = function(enum)
 				enum = tonumber(enum)
-				if not friendly_translate_rev[enum]  then
+
+				if not friendly_translate_rev[enum] then
 					for k, v in pairs(friendly_translate_rev) do
 						print(k, v)
 					end
+
 					error("invalid enum: " .. tostring(enum), 2)
 				end
+
 				return friendly_translate_rev[enum]
 			end,
 		},
@@ -87,9 +89,23 @@ local function build_translator(ctype, starts_with, strip)
 			__call = function(_, str)
 				return translate(str)
 			end,
-			
 		}
 	)
 end
 
-return build_translator
+local function enum_to_string(enum_type, enum)
+	if not enum then enum = enum_type end
+
+	local enums = get_enums(enum_type)
+
+	for name, value in pairs(enums) do
+		if value == tonumber(enum) then return name end
+	end
+
+	return "UNKNOWN_ENUM_VALUE"
+end
+
+return {
+	enum_to_string = enum_to_string,
+	build_translator = build_translator,
+}

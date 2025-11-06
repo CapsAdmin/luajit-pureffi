@@ -1,18 +1,20 @@
 local ffi = require("ffi")
 local vk = require("vk")
+local T = require("helpers.ffi_types")
 local shaderc = require("shaderc")
 local setmetatable = require("helpers.setmetatable_gc")
 local lib = vk.find_library()
 local vulkan = {}
 vulkan.vk = vk
 vulkan.lib = lib
-local enum_translator = require("helpers.enum_translator")
-
+local enums = require("helpers.enum_translator")
+local enum_to_string = enums.enum_to_string
+local build_translator = enums.build_translator
 local function translate_enums(enums)
 	local out = {}
 
 	for _, args in ipairs(enums) do
-		out[args[2]] = enum_translator(args[1], args[2], {unpack(args, 3)})
+		out[args[2]] = build_translator(args[1], args[2], {unpack(args, 3)})
 	end
 
 	return out
@@ -52,7 +54,7 @@ vulkan.enums = enums
 local function vk_assert(result, msg)
 	if result ~= 0 then
 		msg = msg or "Vulkan error"
-		local enum_str = vk.EnumToString(result) or ("error code - " .. tostring(result))
+		local enum_str = enum_to_string(result) or ("error code - " .. tostring(result))
 		error(msg .. " : " .. enum_str, 2)
 	end
 end
@@ -64,7 +66,7 @@ function vulkan.GetAvailableLayers()
 	local out = {}
 
 	if layerCount[0] > 0 then
-		local availableLayers = vk.Array(vk.VkLayerProperties)(layerCount[0])
+		local availableLayers = T.Array(vk.VkLayerProperties)(layerCount[0])
 		lib.vkEnumerateInstanceLayerProperties(layerCount, availableLayers)
 
 		for i = 0, layerCount[0] - 1 do
@@ -83,7 +85,7 @@ function vulkan.GetAvailableExtensions()
 	local out = {}
 
 	if extensionCount[0] > 0 then
-		local availableExtensions = vk.Array(vk.VkExtensionProperties)(extensionCount[0])
+		local availableExtensions = T.Array(vk.VkExtensionProperties)(extensionCount[0])
 		lib.vkEnumerateInstanceExtensionProperties(nil, extensionCount, availableExtensions)
 
 		for i = 0, extensionCount[0] - 1 do
@@ -138,7 +140,7 @@ do -- instance
 
 		local version = vk.VK_API_VERSION_1_4
 		print("requesting version: " .. vulkan.VersionToString(version))
-		local appInfo = vk.Box(
+		local appInfo = T.Box(
 			vk.VkApplicationInfo,
 			{
 				sType = "VK_STRUCTURE_TYPE_APPLICATION_INFO",
@@ -151,10 +153,10 @@ do -- instance
 		)
 		print("version loaded: " .. vulkan.GetVersion())
 		local extension_names = extensions and
-			vk.Array(ffi.typeof("const char*"), #extensions, extensions) or
+			T.Array(ffi.typeof("const char*"), #extensions, extensions) or
 			nil
-		local layer_names = layers and vk.Array(ffi.typeof("const char*"), #layers, layers) or nil
-		local createInfo = vk.Box(
+		local layer_names = layers and T.Array(ffi.typeof("const char*"), #layers, layers) or nil
+		local createInfo = T.Box(
 			vk.VkInstanceCreateInfo,
 			{
 				sType = "VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO",
@@ -167,7 +169,7 @@ do -- instance
 				ppEnabledExtensionNames = extension_names,
 			}
 		)
-		local ptr = vk.Box(vk.VkInstance)()
+		local ptr = T.Box(vk.VkInstance)()
 		vk_assert(lib.vkCreateInstance(createInfo, nil, ptr), "failed to create vulkan instance")
 		return setmetatable({ptr = ptr}, Instance)
 	end
@@ -190,7 +192,7 @@ do -- instance
 					pLayer = ffi.cast("const void*", metal_layer),
 				}
 			)
-			local ptr = vk.Box(vk.VkSurfaceKHR)()
+			local ptr = T.Box(vk.VkSurfaceKHR)()
 			local vkCreateMetalSurfaceEXT = vk.GetExtension(lib, self.ptr[0], "vkCreateMetalSurfaceEXT")
 			vk_assert(
 				vkCreateMetalSurfaceEXT(self.ptr[0], surfaceCreateInfo, nil, ptr),
@@ -219,7 +221,7 @@ do -- instance
 
 			if deviceCount[0] == 0 then error("no physical devices found") end
 
-			local physicalDevices = vk.Array(vk.VkPhysicalDevice)(deviceCount[0])
+			local physicalDevices = T.Array(vk.VkPhysicalDevice)(deviceCount[0])
 			vk_assert(
 				lib.vkEnumeratePhysicalDevices(self.ptr[0], deviceCount, physicalDevices),
 				"failed to enumerate physical devices"
@@ -263,7 +265,7 @@ do -- instance
 			local formatCount = ffi.new("uint32_t[1]", 0)
 			lib.vkGetPhysicalDeviceSurfaceFormatsKHR(self.ptr, surface.ptr[0], formatCount, nil)
 			local count = formatCount[0]
-			local formats = vk.Array(vk.VkSurfaceFormatKHR)(count)
+			local formats = T.Array(vk.VkSurfaceFormatKHR)(count)
 			lib.vkGetPhysicalDeviceSurfaceFormatsKHR(self.ptr, surface.ptr[0], formatCount, formats)
 			-- Convert to Lua table
 			local result = {}
@@ -282,7 +284,7 @@ do -- instance
 			local count = ffi.new("uint32_t[1]", 0)
 			lib.vkGetPhysicalDeviceQueueFamilyProperties(self.ptr, count, nil)
 			local queue_family_count = count[0]
-			local queue_families = vk.Array(vk.VkQueueFamilyProperties)(queue_family_count)
+			local queue_families = T.Array(vk.VkQueueFamilyProperties)(queue_family_count)
 			lib.vkGetPhysicalDeviceQueueFamilyProperties(self.ptr, count, queue_families)
 			local result = {}
 
@@ -294,7 +296,7 @@ do -- instance
 		end
 
 		function PhysicalDevice:GetSurfaceCapabilities(surface)
-			local surfaceCapabilities = vk.Box(vk.VkSurfaceCapabilitiesKHR)()
+			local surfaceCapabilities = T.Box(vk.VkSurfaceCapabilitiesKHR)()
 			vk_assert(
 				lib.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.ptr, surface.ptr[0], surfaceCapabilities),
 				"failed to get surface capabilities"
@@ -306,7 +308,7 @@ do -- instance
 			local presentModeCount = ffi.new("uint32_t[1]", 0)
 			lib.vkGetPhysicalDeviceSurfacePresentModesKHR(self.ptr, surface.ptr[0], presentModeCount, nil)
 			local count = presentModeCount[0]
-			local presentModes = vk.Array(vk.VkPresentModeKHR)(count)
+			local presentModes = T.Array(vk.VkPresentModeKHR)(count)
 			lib.vkGetPhysicalDeviceSurfacePresentModesKHR(self.ptr, surface.ptr[0], presentModeCount, presentModes)
 			-- Convert to Lua table
 			local result = {}
@@ -326,7 +328,7 @@ do -- instance
 				-- Check if VK_KHR_portability_subset is supported and add it if needed
 				local extensionCount = ffi.new("uint32_t[1]", 0)
 				lib.vkEnumerateDeviceExtensionProperties(self.ptr, nil, extensionCount, nil)
-				local availableExtensions = vk.Array(vk.VkExtensionProperties)(extensionCount[0])
+				local availableExtensions = T.Array(vk.VkExtensionProperties)(extensionCount[0])
 				lib.vkEnumerateDeviceExtensionProperties(self.ptr, nil, extensionCount, availableExtensions)
 				local hasPortabilitySubset = false
 
@@ -377,7 +379,7 @@ do -- instance
 				end
 
 				local queuePriority = ffi.new("float[1]", 1.0)
-				local queueCreateInfo = vk.Box(
+				local queueCreateInfo = T.Box(
 					vk.VkDeviceQueueCreateInfo,
 					{
 						sType = "VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO",
@@ -386,8 +388,8 @@ do -- instance
 						pQueuePriorities = queuePriority,
 					}
 				)
-				local deviceExtensions = vk.Array(ffi.typeof("const char*"), #finalExtensions, finalExtensions)
-				local deviceCreateInfo = vk.Box(
+				local deviceExtensions = T.Array(ffi.typeof("const char*"), #finalExtensions, finalExtensions)
+				local deviceCreateInfo = T.Box(
 					vk.VkDeviceCreateInfo,
 					{
 						sType = "VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO",
@@ -397,7 +399,7 @@ do -- instance
 						ppEnabledExtensionNames = deviceExtensions,
 					}
 				)
-				local ptr = vk.Box(vk.VkDevice)()
+				local ptr = T.Box(vk.VkDevice)()
 				vk_assert(
 					lib.vkCreateDevice(self.ptr, deviceCreateInfo, nil, ptr),
 					"failed to create device"
@@ -419,7 +421,7 @@ do -- instance
 
 				function Device:CreateShaderModule(glsl, type)
 					local spirv_data, spirv_size = shaderc.compile(glsl, type)
-					local shaderModuleCreateInfo = vk.Box(
+					local shaderModuleCreateInfo = T.Box(
 						vk.VkShaderModuleCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO",
@@ -427,7 +429,7 @@ do -- instance
 							pCode = ffi.cast("const uint32_t*", spirv_data),
 						}
 					)
-					local ptr = vk.Box(vk.VkShaderModule)()
+					local ptr = T.Box(vk.VkShaderModule)()
 					vk_assert(
 						lib.vkCreateShaderModule(self.ptr[0], shaderModuleCreateInfo, nil, ptr),
 						"failed to create shader module"
@@ -445,7 +447,7 @@ do -- instance
 				Queue.__index = Queue
 
 				function Device:GetQueue(graphicsQueueFamily)
-					local deviceQueue = vk.Box(vk.VkQueue)()
+					local deviceQueue = T.Box(vk.VkQueue)()
 					lib.vkGetDeviceQueue(self.ptr[0], graphicsQueueFamily, 0, deviceQueue)
 					return setmetatable({ptr = deviceQueue}, Queue)
 				end
@@ -460,7 +462,7 @@ do -- instance
 						"uint32_t[1]",
 						vk.VkPipelineStageFlagBits("VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT")
 					)
-					local submitInfo = vk.Box(
+					local submitInfo = T.Box(
 						vk.VkSubmitInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_SUBMIT_INFO",
@@ -481,7 +483,7 @@ do -- instance
 
 				function Queue:SubmitAndWait(device, commandBuffer, fence)
 					lib.vkResetFences(device.ptr[0], 1, fence.ptr)
-					local submitInfo = vk.Box(
+					local submitInfo = T.Box(
 						vk.VkSubmitInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_SUBMIT_INFO",
@@ -529,7 +531,7 @@ do -- instance
 						imageCount = surfaceCapabilities[0].maxImageCount
 					end
 
-					local swapchainCreateInfo = vk.Box(
+					local swapchainCreateInfo = T.Box(
 						vk.VkSwapchainCreateInfoKHR,
 						{
 							sType = "VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR",
@@ -548,7 +550,7 @@ do -- instance
 							oldSwapchain = old_swapchain and old_swapchain.ptr[0],
 						}
 					)
-					local ptr = vk.Box(vk.VkSwapchainKHR)()
+					local ptr = T.Box(vk.VkSwapchainKHR)()
 					vk_assert(
 						lib.vkCreateSwapchainKHR(self.ptr[0], swapchainCreateInfo, nil, ptr),
 						"failed to create swapchain"
@@ -563,7 +565,7 @@ do -- instance
 				function Swapchain:GetImages()
 					local imageCount = ffi.new("uint32_t[1]", 0)
 					lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.ptr[0], imageCount, nil)
-					local swapchainImages = vk.Array(vk.VkImage)(imageCount[0])
+					local swapchainImages = T.Array(vk.VkImage)(imageCount[0])
 					lib.vkGetSwapchainImagesKHR(self.device.ptr[0], self.ptr[0], imageCount, swapchainImages)
 					local out = {}
 
@@ -590,14 +592,14 @@ do -- instance
 					elseif result == vk.VkResult("VK_SUBOPTIMAL_KHR") then
 						return imageIndex[0], "suboptimal"
 					elseif result ~= 0 then
-						error("failed to acquire next image: " .. vk.EnumToString(result))
+						error("failed to acquire next image: " .. enum_to_string(result))
 					end
 
 					return imageIndex[0], "ok"
 				end
 
 				function Swapchain:Present(renderFinishedSemaphore, deviceQueue, imageIndex)
-					local presentInfo = vk.Box(
+					local presentInfo = T.Box(
 						vk.VkPresentInfoKHR,
 						{
 							sType = "VK_STRUCTURE_TYPE_PRESENT_INFO_KHR",
@@ -615,7 +617,7 @@ do -- instance
 					elseif result == vk.VkResult("VK_SUBOPTIMAL_KHR") then
 						return false
 					elseif result ~= vk.VkResult("VK_SUCCESS") then
-						error("failed to present: " .. vk.EnumToString(result))
+						error("failed to present: " .. enum_to_string(result))
 					end
 
 					return true
@@ -627,7 +629,7 @@ do -- instance
 				CommandPool.__index = CommandPool
 
 				function Device:CreateCommandPool(graphicsQueueFamily)
-					local commandPoolCreateInfo = vk.Box(
+					local commandPoolCreateInfo = T.Box(
 						vk.VkCommandPoolCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO",
@@ -635,7 +637,7 @@ do -- instance
 							flags = vk.VkCommandPoolCreateFlagBits("VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT"),
 						}
 					)
-					local ptr = vk.Box(vk.VkCommandPool)()
+					local ptr = T.Box(vk.VkCommandPool)()
 					vk_assert(
 						lib.vkCreateCommandPool(self.ptr[0], commandPoolCreateInfo, nil, ptr),
 						"failed to create command pool"
@@ -652,7 +654,7 @@ do -- instance
 					CommandBuffer.__index = CommandBuffer
 
 					function CommandPool:CreateCommandBuffer()
-						local commandBufferAllocInfo = vk.Box(
+						local commandBufferAllocInfo = T.Box(
 							vk.VkCommandBufferAllocateInfo,
 							{
 								sType = "VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO",
@@ -661,7 +663,7 @@ do -- instance
 								commandBufferCount = 1,
 							}
 						)
-						local commandBuffer = vk.Box(vk.VkCommandBuffer)()
+						local commandBuffer = T.Box(vk.VkCommandBuffer)()
 						vk_assert(
 							lib.vkAllocateCommandBuffers(self.device.ptr[0], commandBufferAllocInfo, commandBuffer),
 							"failed to allocate command buffer"
@@ -670,7 +672,7 @@ do -- instance
 					end
 
 					function CommandBuffer:Begin()
-						local beginInfo = vk.Box(
+						local beginInfo = T.Box(
 							vk.VkCommandBufferBeginInfo,
 							{
 								sType = "VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO",
@@ -691,7 +693,7 @@ do -- instance
 						-- For first frame, transition from UNDEFINED
 						-- For subsequent frames, transition from PRESENT_SRC_KHR (what the render pass leaves it in)
 						local oldLayout = isFirstFrame and "VK_IMAGE_LAYOUT_UNDEFINED" or "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR"
-						local barrier = vk.Box(
+						local barrier = T.Box(
 							vk.VkImageMemoryBarrier,
 							{
 								sType = "VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER",
@@ -754,7 +756,7 @@ do -- instance
 
 					function CommandBuffer:BeginRenderPass(renderPass, framebuffer, extent, clearColor)
 						clearColor = clearColor or {0.0, 0.0, 0.0, 1.0}
-						local clearValue = vk.Box(
+						local clearValue = T.Box(
 							vk.VkClearValue,
 							{
 								color = {
@@ -762,7 +764,7 @@ do -- instance
 								},
 							}
 						)
-						local renderPassInfo = vk.Box(
+						local renderPassInfo = T.Box(
 							vk.VkRenderPassBeginInfo,
 							{
 								sType = "VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO",
@@ -795,8 +797,8 @@ do -- instance
 						-- buffers is an array of Buffer objects
 						-- offsets is optional array of offsets
 						local bufferCount = #buffers
-						local bufferArray = vk.Array(vk.VkBuffer)(bufferCount)
-						local offsetArray = vk.Array(vk.VkDeviceSize)(bufferCount)
+						local bufferArray = T.Array(vk.VkBuffer)(bufferCount)
+						local offsetArray = T.Array(vk.VkDeviceSize)(bufferCount)
 
 						for i, buffer in ipairs(buffers) do
 							bufferArray[i - 1] = buffer.ptr[0]
@@ -815,7 +817,7 @@ do -- instance
 					function CommandBuffer:BindDescriptorSets(type, pipelineLayout, descriptorSets, firstSet)
 						-- descriptorSets is an array of descriptor set objects
 						local setCount = #descriptorSets
-						local setArray = vk.Array(vk.VkDescriptorSet)(setCount)
+						local setArray = T.Array(vk.VkDescriptorSet)(setCount)
 
 						for i, ds in ipairs(descriptorSets) do
 							setArray[i - 1] = ds.ptr[0]
@@ -844,7 +846,7 @@ do -- instance
 					end
 
 					function CommandBuffer:SetViewport(x, y, width, height, minDepth, maxDepth)
-						local viewport = vk.Box(
+						local viewport = T.Box(
 							vk.VkViewport,
 							{
 								x = x or 0.0,
@@ -859,7 +861,7 @@ do -- instance
 					end
 
 					function CommandBuffer:SetScissor(x, y, width, height)
-						local scissor = vk.Box(
+						local scissor = T.Box(
 							vk.VkRect2D,
 							{
 								offset = {x = x or 0, y = y or 0},
@@ -870,7 +872,7 @@ do -- instance
 					end
 
 					function CommandBuffer:ClearColorImage(config)
-						local range = vk.Box(
+						local range = T.Box(
 							vk.VkImageSubresourceRange,
 							{
 								aspectMask = enums.VK_IMAGE_ASPECT_(config.aspect_mask or "color"),
@@ -884,7 +886,7 @@ do -- instance
 							self.ptr[0],
 							config.image,
 							"VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL",
-							vk.Box(
+							T.Box(
 								vk.VkClearColorValue,
 								{
 									float32 = config.color or {0.0, 0.0, 0.0, 1.0},
@@ -915,7 +917,7 @@ do -- instance
 
 						if config.imageBarriers then
 							imageBarrierCount = #config.imageBarriers
-							imageBarriers = vk.Array(vk.VkImageMemoryBarrier)(imageBarrierCount)
+							imageBarriers = T.Array(vk.VkImageMemoryBarrier)(imageBarrierCount)
 
 							for i, barrier in ipairs(config.imageBarriers) do
 								imageBarriers[i - 1] = vk.VkImageMemoryBarrier(
@@ -955,7 +957,7 @@ do -- instance
 					end
 
 					function CommandBuffer:CopyImageToImage(srcImage, dstImage, width, height)
-						local region = vk.Box(
+						local region = T.Box(
 							vk.VkImageCopy,
 							{
 								srcSubresource = {
@@ -987,7 +989,7 @@ do -- instance
 					end
 
 					function CommandBuffer:CopyBufferToImage(buffer, image, width, height)
-						local region = vk.Box(
+						local region = T.Box(
 							vk.VkBufferImageCopy,
 							{
 								bufferOffset = 0,
@@ -1020,7 +1022,7 @@ do -- instance
 				Buffer.__index = Buffer
 
 				function Device:FindMemoryType(typeFilter, properties)
-					local memProperties = vk.Box(vk.VkPhysicalDeviceMemoryProperties)()
+					local memProperties = T.Box(vk.VkPhysicalDeviceMemoryProperties)()
 					lib.vkGetPhysicalDeviceMemoryProperties(self.physical_device.ptr, memProperties)
 
 					for i = 0, memProperties[0].memoryTypeCount - 1 do
@@ -1038,7 +1040,7 @@ do -- instance
 				function Device:CreateBuffer(size, usage, properties)
 					usage = enums.VK_BUFFER_USAGE_(usage)
 					properties = enums.VK_MEMORY_PROPERTY_(properties or {"host_visible", "host_coherent"})
-					local bufferInfo = vk.Box(
+					local bufferInfo = T.Box(
 						vk.VkBufferCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO",
@@ -1047,14 +1049,14 @@ do -- instance
 							sharingMode = "VK_SHARING_MODE_EXCLUSIVE",
 						}
 					)
-					local buffer_ptr = vk.Box(vk.VkBuffer)()
+					local buffer_ptr = T.Box(vk.VkBuffer)()
 					vk_assert(
 						lib.vkCreateBuffer(self.ptr[0], bufferInfo, nil, buffer_ptr),
 						"failed to create buffer"
 					)
-					local memRequirements = vk.Box(vk.VkMemoryRequirements)()
+					local memRequirements = T.Box(vk.VkMemoryRequirements)()
 					lib.vkGetBufferMemoryRequirements(self.ptr[0], buffer_ptr[0], memRequirements)
-					local allocInfo = vk.Box(
+					local allocInfo = T.Box(
 						vk.VkMemoryAllocateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO",
@@ -1062,7 +1064,7 @@ do -- instance
 							memoryTypeIndex = self:FindMemoryType(memRequirements[0].memoryTypeBits, properties),
 						}
 					)
-					local memory_ptr = vk.Box(vk.VkDeviceMemory)()
+					local memory_ptr = T.Box(vk.VkDeviceMemory)()
 					vk_assert(
 						lib.vkAllocateMemory(self.ptr[0], allocInfo, nil, memory_ptr),
 						"failed to allocate buffer memory"
@@ -1107,7 +1109,7 @@ do -- instance
 
 				function Device:CreateDescriptorSetLayout(bindings)
 					-- bindings is an array of tables: {{binding, type, stageFlags, count}, ...}
-					local bindingArray = vk.Array(vk.VkDescriptorSetLayoutBinding)(#bindings)
+					local bindingArray = T.Array(vk.VkDescriptorSetLayoutBinding)(#bindings)
 
 					for i, b in ipairs(bindings) do
 						bindingArray[i - 1].binding = b.binding or (i - 1)
@@ -1117,7 +1119,7 @@ do -- instance
 						bindingArray[i - 1].pImmutableSamplers = nil
 					end
 
-					local layoutInfo = vk.Box(
+					local layoutInfo = T.Box(
 						vk.VkDescriptorSetLayoutCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO",
@@ -1125,7 +1127,7 @@ do -- instance
 							pBindings = bindingArray,
 						}
 					)
-					local ptr = vk.Box(vk.VkDescriptorSetLayout)()
+					local ptr = T.Box(vk.VkDescriptorSetLayout)()
 					vk_assert(
 						lib.vkCreateDescriptorSetLayout(self.ptr[0], layoutInfo, nil, ptr),
 						"failed to create descriptor set layout"
@@ -1144,14 +1146,14 @@ do -- instance
 
 				function Device:CreateDescriptorPool(poolSizes, maxSets)
 					-- poolSizes is an array of tables: {{type, count}, ...}
-					local poolSizeArray = vk.Array(vk.VkDescriptorPoolSize)(#poolSizes)
+					local poolSizeArray = T.Array(vk.VkDescriptorPoolSize)(#poolSizes)
 
 					for i, ps in ipairs(poolSizes) do
 						poolSizeArray[i - 1].type = enums.VK_DESCRIPTOR_TYPE_(ps.type)
 						poolSizeArray[i - 1].descriptorCount = ps.count or 1
 					end
 
-					local poolInfo = vk.Box(
+					local poolInfo = T.Box(
 						vk.VkDescriptorPoolCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO",
@@ -1160,7 +1162,7 @@ do -- instance
 							maxSets = maxSets or 1,
 						}
 					)
-					local ptr = vk.Box(vk.VkDescriptorPool)()
+					local ptr = T.Box(vk.VkDescriptorPool)()
 					vk_assert(
 						lib.vkCreateDescriptorPool(self.ptr[0], poolInfo, nil, ptr),
 						"failed to create descriptor pool"
@@ -1169,7 +1171,7 @@ do -- instance
 				end
 
 				function DescriptorPool:AllocateDescriptorSet(layout)
-					local allocInfo = vk.Box(
+					local allocInfo = T.Box(
 						vk.VkDescriptorSetAllocateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO",
@@ -1178,7 +1180,7 @@ do -- instance
 							pSetLayouts = layout.ptr,
 						}
 					)
-					local ptr = vk.Box(vk.VkDescriptorSet)()
+					local ptr = T.Box(vk.VkDescriptorSet)()
 					vk_assert(
 						lib.vkAllocateDescriptorSets(self.device.ptr[0], allocInfo, ptr),
 						"failed to allocate descriptor set"
@@ -1203,7 +1205,7 @@ do -- instance
 					isStorageImage = descriptorType == "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
 				end
 
-				local descriptorWrite = vk.Box(
+				local descriptorWrite = T.Box(
 					vk.VkWriteDescriptorSet,
 					{
 						sType = "VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET",
@@ -1216,7 +1218,7 @@ do -- instance
 				)
 
 				if isStorageImage then
-					local imageInfo = vk.Box(
+					local imageInfo = T.Box(
 						vk.VkDescriptorImageInfo,
 						{
 							sampler = nil,
@@ -1226,7 +1228,7 @@ do -- instance
 					)
 					descriptorWrite[0].pImageInfo = imageInfo
 				else
-					local bufferInfo = vk.Box(
+					local bufferInfo = T.Box(
 						vk.VkDescriptorBufferInfo,
 						{
 							buffer = resource.ptr[0],
@@ -1245,13 +1247,13 @@ do -- instance
 				Semaphore.__index = Semaphore
 
 				function Device:CreateSemaphore()
-					local semaphoreCreateInfo = vk.Box(
+					local semaphoreCreateInfo = T.Box(
 						vk.VkSemaphoreCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO",
 						}
 					)
-					local ptr = vk.Box(vk.VkSemaphore)()
+					local ptr = T.Box(vk.VkSemaphore)()
 					vk_assert(
 						lib.vkCreateSemaphore(self.ptr[0], semaphoreCreateInfo, nil, ptr),
 						"failed to create semaphore"
@@ -1269,14 +1271,14 @@ do -- instance
 				Fence.__index = Fence
 
 				function Device:CreateFence()
-					local fenceCreateInfo = vk.Box(
+					local fenceCreateInfo = T.Box(
 						vk.VkFenceCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_FENCE_CREATE_INFO",
 							flags = vk.VkFenceCreateFlagBits("VK_FENCE_CREATE_SIGNALED_BIT"),
 						}
 					)
-					local ptr = vk.Box(vk.VkFence)()
+					local ptr = T.Box(vk.VkFence)()
 					vk_assert(lib.vkCreateFence(self.ptr[0], fenceCreateInfo, nil, ptr), "failed to create fence")
 					return setmetatable({ptr = ptr, device = self}, Fence)
 				end
@@ -1302,7 +1304,7 @@ do -- instance
 
 					if samples == "1" then
 						attachment_count = 1
-						attachments = vk.Box(
+						attachments = T.Box(
 							vk.VkAttachmentDescription,
 							{
 								format = enums.VK_FORMAT_(surfaceFormat.format),
@@ -1317,7 +1319,7 @@ do -- instance
 						)
 					else
 						attachment_count = 2
-						attachments = vk.Array(
+						attachments = T.Array(
 							vk.VkAttachmentDescription,
 							2,
 							{
@@ -1348,21 +1350,21 @@ do -- instance
 					--attachments[0].samples = "VK_SAMPLE_COUNT_2_BIT"
 					end
 
-					local colorAttachmentRef = vk.Box(
+					local colorAttachmentRef = T.Box(
 						vk.VkAttachmentReference,
 						{
 							attachment = 0,
 							layout = "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL",
 						}
 					)
-					local subpass = vk.Box(
+					local subpass = T.Box(
 						vk.VkSubpassDescription,
 						{
 							pipelineBindPoint = "VK_PIPELINE_BIND_POINT_GRAPHICS",
 							colorAttachmentCount = 1,
 							pColorAttachments = colorAttachmentRef,
 							pResolveAttachments = samples ~= "1" and
-								vk.Box(
+								T.Box(
 									vk.VkAttachmentReference,
 									{
 										attachment = 1,
@@ -1372,7 +1374,7 @@ do -- instance
 								nil,
 						}
 					)
-					local dependency = vk.Box(
+					local dependency = T.Box(
 						vk.VkSubpassDependency,
 						{
 							srcSubpass = vk.VK_SUBPASS_EXTERNAL,
@@ -1383,7 +1385,7 @@ do -- instance
 							dstAccessMask = vk.VkAccessFlagBits("VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT"),
 						}
 					)
-					local renderPassInfo = vk.Box(
+					local renderPassInfo = T.Box(
 						vk.VkRenderPassCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO",
@@ -1395,7 +1397,7 @@ do -- instance
 							pDependencies = dependency,
 						}
 					)
-					local ptr = vk.Box(vk.VkRenderPass)()
+					local ptr = T.Box(vk.VkRenderPass)()
 					vk_assert(
 						lib.vkCreateRenderPass(self.ptr[0], renderPassInfo, nil, ptr),
 						"failed to create render pass with MSAA"
@@ -1418,20 +1420,20 @@ do -- instance
 
 					if msaaImageView then
 						-- MSAA: first attachment is MSAA color, second is resolve target (swapchain)
-						local attachment_array = vk.Array(vk.VkImageView)(2)
+						local attachment_array = T.Array(vk.VkImageView)(2)
 						attachment_array[0] = msaaImageView
 						attachment_array[1] = imageView
 						attachments = attachment_array
 						attachmentCount = 2
 					else
 						-- Non-MSAA: single attachment
-						local attachment_array = vk.Array(vk.VkImageView)(1)
+						local attachment_array = T.Array(vk.VkImageView)(1)
 						attachment_array[0] = imageView
 						attachments = attachment_array
 						attachmentCount = 1
 					end
 
-					local framebufferInfo = vk.Box(
+					local framebufferInfo = T.Box(
 						vk.VkFramebufferCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO",
@@ -1443,7 +1445,7 @@ do -- instance
 							layers = 1,
 						}
 					)
-					local ptr = vk.Box(vk.VkFramebuffer)()
+					local ptr = T.Box(vk.VkFramebuffer)()
 					vk_assert(
 						lib.vkCreateFramebuffer(self.ptr[0], framebufferInfo, nil, ptr),
 						"failed to create framebuffer"
@@ -1461,7 +1463,7 @@ do -- instance
 				ImageView.__index = ImageView
 
 				function Device:CreateImageView(image, format)
-					local viewInfo = vk.Box(
+					local viewInfo = T.Box(
 						vk.VkImageViewCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO",
@@ -1477,7 +1479,7 @@ do -- instance
 							},
 						}
 					)
-					local ptr = vk.Box(vk.VkImageView)()
+					local ptr = T.Box(vk.VkImageView)()
 					vk_assert(
 						lib.vkCreateImageView(self.ptr[0], viewInfo, nil, ptr),
 						"failed to create image view"
@@ -1496,7 +1498,7 @@ do -- instance
 
 				function Device:CreateImage(width, height, format, usage, properties, samples)
 					samples = samples or "1"
-					local imageInfo = vk.Box(
+					local imageInfo = T.Box(
 						vk.VkImageCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO",
@@ -1516,15 +1518,15 @@ do -- instance
 							initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
 						}
 					)
-					local image_ptr = vk.Box(vk.VkImage)()
+					local image_ptr = T.Box(vk.VkImage)()
 					vk_assert(
 						lib.vkCreateImage(self.ptr[0], imageInfo, nil, image_ptr),
 						"failed to create image"
 					)
-					local memRequirements = vk.Box(vk.VkMemoryRequirements)()
+					local memRequirements = T.Box(vk.VkMemoryRequirements)()
 					lib.vkGetImageMemoryRequirements(self.ptr[0], image_ptr[0], memRequirements)
 					properties = enums.VK_MEMORY_PROPERTY_(properties or "device_local")
-					local allocInfo = vk.Box(
+					local allocInfo = T.Box(
 						vk.VkMemoryAllocateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO",
@@ -1532,7 +1534,7 @@ do -- instance
 							memoryTypeIndex = self:FindMemoryType(memRequirements[0].memoryTypeBits, properties),
 						}
 					)
-					local memory_ptr = vk.Box(vk.VkDeviceMemory)()
+					local memory_ptr = T.Box(vk.VkDeviceMemory)()
 					vk_assert(
 						lib.vkAllocateMemory(self.ptr[0], allocInfo, nil, memory_ptr),
 						"failed to allocate image memory"
@@ -1573,14 +1575,14 @@ do -- instance
 
 					if descriptorSetLayouts and #descriptorSetLayouts > 0 then
 						setLayoutCount = #descriptorSetLayouts
-						setLayoutArray = vk.Array(vk.VkDescriptorSetLayout)(setLayoutCount)
+						setLayoutArray = T.Array(vk.VkDescriptorSetLayout)(setLayoutCount)
 
 						for i, layout in ipairs(descriptorSetLayouts) do
 							setLayoutArray[i - 1] = layout.ptr[0]
 						end
 					end
 
-					local pipelineLayoutInfo = vk.Box(
+					local pipelineLayoutInfo = T.Box(
 						vk.VkPipelineLayoutCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO",
@@ -1590,7 +1592,7 @@ do -- instance
 							pPushConstantRanges = nil,
 						}
 					)
-					local ptr = vk.Box(vk.VkPipelineLayout)()
+					local ptr = T.Box(vk.VkPipelineLayout)()
 					vk_assert(
 						lib.vkCreatePipelineLayout(self.ptr[0], pipelineLayoutInfo, nil, ptr),
 						"failed to create pipeline layout"
@@ -1608,7 +1610,7 @@ do -- instance
 				ComputePipeline.__index = ComputePipeline
 
 				function Device:CreateComputePipeline(shaderModule, pipelineLayout)
-					local computeShaderStageInfo = vk.Box(
+					local computeShaderStageInfo = T.Box(
 						vk.VkPipelineShaderStageCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO",
@@ -1617,7 +1619,7 @@ do -- instance
 							pName = "main",
 						}
 					)
-					local computePipelineCreateInfo = vk.Box(
+					local computePipelineCreateInfo = T.Box(
 						vk.VkComputePipelineCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO",
@@ -1627,7 +1629,7 @@ do -- instance
 							basePipelineIndex = -1,
 						}
 					)
-					local ptr = vk.Box(vk.VkPipeline)()
+					local ptr = T.Box(vk.VkPipeline)()
 					vk_assert(
 						lib.vkCreateComputePipelines(self.ptr[0], nil, 1, computePipelineCreateInfo, nil, ptr),
 						"failed to create compute pipeline"
@@ -1667,7 +1669,7 @@ do -- instance
 
 					if config.vertexBindings then
 						bindingCount = #config.vertexBindings
-						bindingArray = vk.Array(vk.VkVertexInputBindingDescription)(bindingCount)
+						bindingArray = T.Array(vk.VkVertexInputBindingDescription)(bindingCount)
 
 						for i, binding in ipairs(config.vertexBindings) do
 							bindingArray[i - 1].binding = binding.binding or (i - 1)
@@ -1678,7 +1680,7 @@ do -- instance
 
 					if config.vertexAttributes then
 						attributeCount = #config.vertexAttributes
-						attributeArray = vk.Array(vk.VkVertexInputAttributeDescription)(attributeCount)
+						attributeArray = T.Array(vk.VkVertexInputAttributeDescription)(attributeCount)
 
 						for i, attr in ipairs(config.vertexAttributes) do
 							attributeArray[i - 1].location = attr.location
@@ -1688,7 +1690,7 @@ do -- instance
 						end
 					end
 
-					local vertexInputInfo = vk.Box(
+					local vertexInputInfo = T.Box(
 						vk.VkPipelineVertexInputStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO",
@@ -1699,7 +1701,7 @@ do -- instance
 						}
 					)
 					config.input_assembly = config.input_assembly or {}
-					local inputAssembly = vk.Box(
+					local inputAssembly = T.Box(
 						vk.VkPipelineInputAssemblyStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO",
@@ -1708,7 +1710,7 @@ do -- instance
 						}
 					)
 					config.viewport = config.viewport or {}
-					local viewport = vk.Box(
+					local viewport = T.Box(
 						vk.VkViewport,
 						{
 							x = config.viewport.x or 0.0,
@@ -1720,7 +1722,7 @@ do -- instance
 						}
 					)
 					config.scissor = config.scissor or {}
-					local scissor = vk.Box(
+					local scissor = T.Box(
 						vk.VkRect2D,
 						{
 							offset = {x = config.scissor.x or 0, y = config.scissor.y or 0},
@@ -1731,7 +1733,7 @@ do -- instance
 						}
 					)
 					-- TODO: support more than one viewport/scissor
-					local viewportState = vk.Box(
+					local viewportState = T.Box(
 						vk.VkPipelineViewportStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO",
@@ -1742,7 +1744,7 @@ do -- instance
 						}
 					)
 					config.rasterizer = config.rasterizer or {}
-					local rasterizer = vk.Box(
+					local rasterizer = T.Box(
 						vk.VkPipelineRasterizationStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO",
@@ -1756,7 +1758,7 @@ do -- instance
 						}
 					)
 					config.multisampling = config.multisampling or {}
-					local multisampling = vk.Box(
+					local multisampling = T.Box(
 						vk.VkPipelineMultisampleStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO",
@@ -1777,14 +1779,14 @@ do -- instance
 						)
 					end
 
-					local colorBlendAttachment = vk.Array(vk.VkPipelineColorBlendAttachmentState)(#colorBlendAttachments)
+					local colorBlendAttachment = T.Array(vk.VkPipelineColorBlendAttachmentState)(#colorBlendAttachments)
 
 					-- Copy attachments to array
 					for i = 1, #colorBlendAttachments do
 						colorBlendAttachment[i - 1] = colorBlendAttachments[i]
 					end
 
-					local colorBlending = vk.Box(
+					local colorBlending = T.Box(
 						vk.VkPipelineColorBlendStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO",
@@ -1796,7 +1798,7 @@ do -- instance
 						}
 					)
 					config.depth_stencil = config.depth_stencil or {}
-					local depthStencilState = vk.Box(
+					local depthStencilState = T.Box(
 						vk.VkPipelineDepthStencilStateCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO",
@@ -1812,13 +1814,13 @@ do -- instance
 
 					if config.dynamic_states then
 						local dynamicStateCount = #config.dynamic_states
-						local dynamicStateArray = vk.Array(vk.VkDynamicState)(dynamicStateCount)
+						local dynamicStateArray = T.Array(vk.VkDynamicState)(dynamicStateCount)
 
 						for i, state in ipairs(config.dynamic_states) do
 							dynamicStateArray[i - 1] = enums.VK_DYNAMIC_STATE_(state)
 						end
 
-						dynamicStateInfo = vk.Box(
+						dynamicStateInfo = T.Box(
 							vk.VkPipelineDynamicStateCreateInfo,
 							{
 								sType = "VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO",
@@ -1832,7 +1834,7 @@ do -- instance
 						error("multiple render passes not supported yet")
 					end
 
-					local pipelineInfo = vk.Box(
+					local pipelineInfo = T.Box(
 						vk.VkGraphicsPipelineCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO",
@@ -1853,7 +1855,7 @@ do -- instance
 							basePipelineIndex = -1,
 						}
 					)
-					local ptr = vk.Box(vk.VkPipeline)()
+					local ptr = T.Box(vk.VkPipeline)()
 					vk_assert(
 						lib.vkCreateGraphicsPipelines(self.ptr[0], nil, 1, pipelineInfo, nil, ptr),
 						"failed to create graphics pipeline"

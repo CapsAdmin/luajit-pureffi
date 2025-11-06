@@ -19,45 +19,6 @@ local mod = {}
 		typedef void* xcb_window_t;
 	]=]
 
-	do
-		local cache = {}
-
-		function mod.EnumToString(enum_type, index)
-			if not index then index = tonumber(enum_type) end
-
-			local enum_id = tonumber(ffi.typeof(enum_type))
-
-			if cache[enum_id] ~= nil then return cache[enum_id] end
-
-			local enum_ctype = ffi.typeinfo(enum_id)
-			local sib = enum_ctype.sib
-
-			while sib do
-				local sib_ctype = ffi.typeinfo(sib)
-				local CT_code = bit.rshift(sib_ctype.info, 28)
-				local current_index = sib_ctype.size
-				
-				-- bug?
-				if current_index == nil then
-					current_index = -1
-				end
-
-				if CT_code == 11 then
-					if current_index == index then
-						cache[enum_id] = sib_ctype.name
-						return cache[enum_id]
-					end
-
-				end
-
-				sib = sib_ctype.sib
-			end
-
-			cache[enum_id] = false
-			return nil
-		end
-	end
-
 	function mod.GetExtension(lib, instance, name)
 		local ptr = lib.vkGetInstanceProcAddr(instance, name)
 
@@ -65,33 +26,6 @@ local mod = {}
 
 		local func = ffi.cast(mod["PFN_" .. name], ptr)
 		return func
-	end
-
-	do
-		-- seem to collide
-		local fixed_len_cache = {}
-		local var_len_cache = {}
-
-		local function array_type(t, len)
-			local key = tonumber(t)
-			if len then
-				fixed_len_cache[key] = fixed_len_cache[key] or ffi.typeof("$[" .. len .. "]", t)
-				return fixed_len_cache[key]
-			end
-			var_len_cache[key] = var_len_cache[key] or ffi.typeof("$[?]", t)
-			return var_len_cache[key]
-		end
-
-		function mod.Array(t, len, ctor)
-			if ctor then return array_type(t, len)(ctor) end
-			return array_type(t, len)
-		end
-
-		function mod.Box(t, ctor)
-			if ctor then return array_type(t, 1)({ctor}) end
-
-			return array_type(t, 1)
-		end
 	end
 
 	function mod.find_library()
@@ -1540,7 +1474,7 @@ do -- Preprocessor Definitions
 	mod.VULKAN_VI_H_ = 1
 	mod.VULKAN_WAYLAND_H_ = 1
 	mod.VULKAN_XLIB_H_ = 1
-	mod.__DATE__ = "Nov 03 2025"
+	mod.__DATE__ = "Nov 06 2025"
 	mod.__GNUC_MINOR__ = 2
 	mod.__GNUC_PATCHLEVEL__ = 1
 	mod.__GNUC__ = 4
@@ -1548,7 +1482,7 @@ do -- Preprocessor Definitions
 	mod.__STDC_HOSTED__ = 1
 	mod.__STDC_VERSION__ = 201710
 	mod.__STDC__ = 1
-	mod.__TIME__ = "18:55:53"
+	mod.__TIME__ = "06:52:43"
 	mod.vulkan_video_codec_av1std = 1
 	mod.vulkan_video_codec_av1std_decode = 1
 	mod.vulkan_video_codec_av1std_encode = 1
