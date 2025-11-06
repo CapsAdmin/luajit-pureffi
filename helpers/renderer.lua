@@ -152,7 +152,7 @@ function Renderer:CreateImageViews()
 			self.device:CreateImageView(swapchain_image, self.surface_formats[self.config.surface_format_index].format)
 		)
 	end
-	
+
 	-- Create MSAA resources if needed
 	if self.msaa_samples and self.msaa_samples ~= "1" then
 		self:CreateMSAAResources()
@@ -162,17 +162,18 @@ end
 function Renderer:CreateMSAAResources()
 	local extent = self.surface_capabilities[0].currentExtent
 	local format = self.surface_formats[self.config.surface_format_index].format
-	
+
 	-- Clean up old MSAA resources if they exist
 	if self.msaa_images then
 		for _, img in ipairs(self.msaa_images) do
-			-- Images are garbage collected automatically
+
+		-- Images are garbage collected automatically
 		end
 	end
-	
+
 	self.msaa_images = {}
 	self.msaa_image_views = {}
-	
+
 	-- Create one MSAA image/view per swapchain image
 	for i = 1, #self.swapchain_images do
 		local msaa_image = self.device:CreateImage(
@@ -183,9 +184,7 @@ function Renderer:CreateMSAAResources()
 			"device_local",
 			self.msaa_samples
 		)
-		
 		local msaa_image_view = msaa_image:CreateView()
-		
 		table.insert(self.msaa_images, msaa_image)
 		table.insert(self.msaa_image_views, msaa_image_view)
 	end
@@ -205,10 +204,11 @@ function Renderer:CreateFramebuffers()
 
 	for i, imageView in ipairs(self.image_views) do
 		local msaa_view = nil
+
 		if self.msaa_image_views and #self.msaa_image_views > 0 then
 			msaa_view = self.msaa_image_views[i].ptr[0]
 		end
-		
+
 		table.insert(
 			self.framebuffers,
 			self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height, msaa_view)
@@ -302,9 +302,9 @@ do
 	function Pipeline.New(renderer, config)
 		local self = setmetatable({}, Pipeline)
 		local uniform_buffers = {}
-
 		-- Extract sample count from multisampling config
 		local samples = "1"
+
 		if config.multisampling and config.multisampling.rasterization_samples then
 			samples = config.multisampling.rasterization_samples
 		end
@@ -327,6 +327,7 @@ do
 				}
 				binding_index = binding_index + 1
 			end
+
 			table.insert(pool_sizes, {type = "storage_image", count = #config.storage_images})
 		end
 
@@ -341,6 +342,7 @@ do
 				}
 				binding_index = binding_index + 1
 			end
+
 			table.insert(pool_sizes, {type = "uniform_buffer", count = #config.uniform_buffers})
 		end
 
@@ -348,7 +350,6 @@ do
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
 		local descriptorPool = renderer.device:CreateDescriptorPool(pool_sizes, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
-
 		-- Update descriptor sets
 		binding_index = 0
 
@@ -395,7 +396,9 @@ do
 				multisampling = config.multisampling,
 				color_blend = config.color_blend,
 				dynamic_states = config.dynamic_states,
-			}, {renderPass}, pipelineLayout
+			},
+			{renderPass},
+			pipelineLayout
 		)
 		self.pipeline = pipeline
 		self.vertex_buffers = config.vertex_buffers
@@ -406,17 +409,11 @@ do
 		self.uniform_buffers = config.uniform_buffers
 		self.descriptorSetLayout = descriptorSetLayout
 		self.descriptorPool = descriptorPool
-
 		return self
 	end
 
 	function Pipeline:UpdateDescriptorSet(index, binding_index, type, obj)
-		self.renderer.device:UpdateDescriptorSet(
-			self.descriptor_sets[index],
-			binding_index,
-			obj,
-			"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
-		)
+		self.renderer.device:UpdateDescriptorSet(self.descriptor_sets[index], binding_index, obj, "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE")
 	end
 
 	function Pipeline:UpdateUniformBuffer(index, data)
@@ -465,65 +462,61 @@ function Renderer:CreateBuffer(config)
 		end
 	end
 
-	local buffer = self.device:CreateBuffer(
-		byte_size,
-		config.buffer_usage,
-		config.memory_property
-	)
+	local buffer = self.device:CreateBuffer(byte_size, config.buffer_usage, config.memory_property)
 
 	if data then buffer:CopyData(data, byte_size) end
 
 	return buffer
 end
 
-
-	function Renderer:UploadToImage(image, data, pixel_count, width, height)
-		-- Create staging buffer
-		local staging_buffer = self.device:CreateBuffer(pixel_count * 4, "transfer_src", {"host_visible", "host_coherent"})
-		staging_buffer:CopyData(data, pixel_count * 4)
-		-- Copy to image using command buffer
-		local cmd_pool = self.device:CreateCommandPool(self.graphics_queue_family)
-		local cmd = cmd_pool:CreateCommandBuffer()
-		cmd:Begin()
-		-- Transition image to transfer dst
-		cmd:PipelineBarrier(
-			{
-				srcStage = "compute",
-				dstStage = "transfer",
-				imageBarriers = {
-					{
-						image = image,
-						srcAccessMask = "none",
-						dstAccessMask = "transfer_write",
-						oldLayout = "undefined",
-						newLayout = "transfer_dst_optimal",
-					},
+function Renderer:UploadToImage(image, data, width, height)
+	local pixel_count = width * height
+	-- Create staging buffer
+	local staging_buffer = self.device:CreateBuffer(pixel_count * 4, "transfer_src", {"host_visible", "host_coherent"})
+	staging_buffer:CopyData(data, pixel_count * 4)
+	-- Copy to image using command buffer
+	local cmd_pool = self.device:CreateCommandPool(self.graphics_queue_family)
+	local cmd = cmd_pool:CreateCommandBuffer()
+	cmd:Begin()
+	-- Transition image to transfer dst
+	cmd:PipelineBarrier(
+		{
+			srcStage = "compute",
+			dstStage = "transfer",
+			imageBarriers = {
+				{
+					image = image,
+					srcAccessMask = "none",
+					dstAccessMask = "transfer_write",
+					oldLayout = "undefined",
+					newLayout = "transfer_dst_optimal",
 				},
-			}
-		)
-		-- Copy buffer to image
-		cmd:CopyBufferToImage(staging_buffer, image, width, height)
-		-- Transition to general layout for compute
-		cmd:PipelineBarrier(
-			{
-				srcStage = "transfer",
-				dstStage = "compute",
-				imageBarriers = {
-					{
-						image = image,
-						srcAccessMask = "transfer_write",
-						dstAccessMask = "shader_read",
-						oldLayout = "transfer_dst_optimal",
-						newLayout = "general",
-					},
+			},
+		}
+	)
+	-- Copy buffer to image
+	cmd:CopyBufferToImage(staging_buffer, image, width, height)
+	-- Transition to general layout for compute
+	cmd:PipelineBarrier(
+		{
+			srcStage = "transfer",
+			dstStage = "compute",
+			imageBarriers = {
+				{
+					image = image,
+					srcAccessMask = "transfer_write",
+					dstAccessMask = "shader_read",
+					oldLayout = "transfer_dst_optimal",
+					newLayout = "general",
 				},
-			}
-		)
-		cmd:End()
-		-- Submit and wait
-		local fence = self.device:CreateFence()
-		self.queue:SubmitAndWait(self.device, cmd, fence)
-	end
+			},
+		}
+	)
+	cmd:End()
+	-- Submit and wait
+	local fence = self.device:CreateFence()
+	self.queue:SubmitAndWait(self.device, cmd, fence)
+end
 
 do
 	local ComputePipeline = {}
@@ -534,29 +527,24 @@ do
 		self.renderer = renderer
 		self.config = config
 		self.current_image_index = 1
-		
 		-- Create shader module
 		local shader = renderer.device:CreateShaderModule(config.shader, "compute")
-		
 		-- Create descriptor set layout
 		local descriptor_set_layout = renderer.device:CreateDescriptorSetLayout(config.descriptor_layout)
 		local pipeline_layout = renderer.device:CreatePipelineLayout({descriptor_set_layout})
-		
 		-- Create compute pipeline
 		local pipeline = renderer.device:CreateComputePipeline(shader, pipeline_layout)
-		
 		-- Determine number of descriptor sets (for ping-pong or single set)
 		local descriptor_set_count = config.descriptor_set_count or 1
-		
 		-- Create descriptor pool
 		local descriptor_pool = renderer.device:CreateDescriptorPool(config.descriptor_pool, descriptor_set_count)
-		
 		-- Create descriptor sets
 		local descriptor_sets = {}
+
 		for i = 1, descriptor_set_count do
 			descriptor_sets[i] = descriptor_pool:AllocateDescriptorSet(descriptor_set_layout)
 		end
-		
+
 		self.shader = shader
 		self.pipeline = pipeline
 		self.pipeline_layout = pipeline_layout
@@ -564,33 +552,11 @@ do
 		self.descriptor_pool = descriptor_pool
 		self.descriptor_sets = descriptor_sets
 		self.workgroup_size = config.workgroup_size or 16
-		
-		-- Bind storage images if provided
-		if config.storage_images then
-			local binding_index = 0
-			for i, img_config in ipairs(config.storage_images) do
-				for set_idx = 1, #descriptor_sets do
-					renderer.device:UpdateDescriptorSet(
-						descriptor_sets[set_idx],
-						binding_index,
-						img_config.image_view,
-						"storage_image"
-					)
-				end
-				binding_index = binding_index + 1
-			end
-		end
-		
 		return self
 	end
 
 	function ComputePipeline:UpdateDescriptorSet(set_index, binding_index, image_view)
-		self.renderer.device:UpdateDescriptorSet(
-			self.descriptor_sets[set_index],
-			binding_index,
-			image_view,
-			"storage_image"
-		)
+		self.renderer.device:UpdateDescriptorSet(self.descriptor_sets[set_index], binding_index, image_view, "storage_image")
 	end
 
 	function ComputePipeline:Dispatch(cmd)
@@ -602,17 +568,15 @@ do
 			{self.descriptor_sets[self.current_image_index]},
 			0
 		)
-		
 		local extent = self.renderer:GetExtent()
 		local w = tonumber(extent.width)
 		local h = tonumber(extent.height)
-		
 		-- Dispatch compute shader
 		local group_count_x = math.ceil(w / self.workgroup_size)
 		local group_count_y = math.ceil(h / self.workgroup_size)
 		cmd:Dispatch(group_count_x, group_count_y, 1)
 	end
-	
+
 	function ComputePipeline:SwapImages()
 		-- Swap images for next frame (useful for ping-pong patterns)
 		self.current_image_index = (self.current_image_index % #self.descriptor_sets) + 1

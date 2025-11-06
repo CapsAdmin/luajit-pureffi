@@ -10,6 +10,7 @@ vulkan.lib = lib
 local enums = require("helpers.enum_translator")
 local enum_to_string = enums.enum_to_string
 local build_translator = enums.build_translator
+
 local function translate_enums(enums)
 	local out = {}
 
@@ -18,6 +19,22 @@ local function translate_enums(enums)
 	end
 
 	return out
+end
+
+if false then
+	for name, ctype in pairs(vk) do
+		--local t = tostring(ctype)
+		--if t:sub(1,11) == "ctype<enum " and t:sub(-2) ~= ")>" then
+		if type(ctype) == "cdata" then
+			local root = ffi.typeinfo(tonumber(ctype))
+
+			if root then
+				local is_enum = bit.rshift(root.info, 28) == 5
+
+				if is_enum then build_translator() end
+			end
+		end
+	end
 end
 
 local enums = translate_enums(

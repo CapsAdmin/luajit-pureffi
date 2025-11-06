@@ -153,9 +153,7 @@ local storage_image_views = {}
 
 local function create_storage_images()
 	local extent = renderer:GetExtent()
-	local w = tonumber(extent.width)
-	local h = tonumber(extent.height)
-	local pixel_count = w * h
+	local pixel_count = extent.width * extent.height
 	
 	-- Generate random initial state
 	local data = ffi.new("uint8_t[?]", pixel_count * 4)
@@ -174,19 +172,18 @@ local function create_storage_images()
 	storage_image_views = {}
 	for i = 1, 2 do
 		local image = renderer.device:CreateImage(
-			w,
-			h,
+			extent.width,
+			extent.height,
 			"R8G8B8A8_UNORM",
 			{"storage", "transfer_dst", "transfer_src"},
 			"device_local"
 		)
-		renderer:UploadToImage(image, data, pixel_count, w, h)
+		renderer:UploadToImage(image, data, extent.width, extent.height)
 		storage_images[i] = image
 		storage_image_views[i] = image:CreateView()
 	end
 end
 
-create_storage_images()
 
 local compute_pipeline = renderer:CreateComputePipeline(
 	{
@@ -203,13 +200,7 @@ local compute_pipeline = renderer:CreateComputePipeline(
 	}
 )
 
--- Setup ping-pong descriptor sets
--- Set 1: reads from image 1, writes to image 2
-compute_pipeline:UpdateDescriptorSet(1, 0, storage_image_views[1])
-compute_pipeline:UpdateDescriptorSet(1, 1, storage_image_views[2])
--- Set 2: reads from image 2, writes to image 1
-compute_pipeline:UpdateDescriptorSet(2, 0, storage_image_views[2])
-compute_pipeline:UpdateDescriptorSet(2, 1, storage_image_views[1])
+create_storage_images()
 
 local graphics_pipeline = renderer:CreatePipeline(
 	{
@@ -271,6 +262,8 @@ function renderer:OnRecreateSwapchain()
 	graphics_pipeline:UpdateDescriptorSet(1, 0, "storage_image", storage_image_views[1])
 end
 
+renderer:OnRecreateSwapchain()
+
 wnd:Initialize()
 
 wnd:OpenWindow()
@@ -300,13 +293,7 @@ while true do
 			print(paused and "Paused" or "Resumed")
 		elseif events.key == "r" or events.key == "R" then
 			create_storage_images()
-			-- Update compute pipeline descriptor sets
-			compute_pipeline:UpdateDescriptorSet(1, 0, storage_image_views[1])
-			compute_pipeline:UpdateDescriptorSet(1, 1, storage_image_views[2])
-			compute_pipeline:UpdateDescriptorSet(2, 0, storage_image_views[2])
-			compute_pipeline:UpdateDescriptorSet(2, 1, storage_image_views[1])
-			-- Update graphics pipeline
-			graphics_pipeline:UpdateDescriptorSet(1, 0, "storage_image", storage_image_views[1])
+			renderer:OnRecreateSwapchain()
 			print("Reset to random state")
 		end
 	end
