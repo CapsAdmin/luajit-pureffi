@@ -1,3 +1,5 @@
+-- luajit luajit_debug.lua examples/vulkan_game_of_life.lua
+-- this will attempt to print a traceback from C and Lua on segfault
 local path = assert(...)
 local ffi = require("ffi")
 local signals = {
