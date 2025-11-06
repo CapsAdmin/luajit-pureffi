@@ -265,13 +265,20 @@ local function poll_events(app, window, event_list)
     )
 
     if event ~= nil and event ~= objc.ptr(nil) then
-        -- Convert and store event before sending to system
+        local event_type = tonumber(objc.msgSend(event, "type"))
+        
+        -- Convert and store event before deciding whether to send to system
         local converted = convert_nsevent(event, window)
         if converted then
             table.insert(event_list, converted)
         end
         
-        app:sendEvent_(event)
+        -- Don't send keyboard events to the system (prevents beep)
+        -- But do send mouse events and other events so the window system works properly
+        if event_type ~= NSEventType.KeyDown and event_type ~= NSEventType.KeyUp then
+            app:sendEvent_(event)
+        end
+        
         app:updateWindows()
         return true
     end
