@@ -2,7 +2,7 @@
 
 This is a collection of pure LuaJIT FFI bindings that aim to be cross-platform compatible.
 
-Each module aims to be standalone, copy-pastable, and have no strict dependency on any shared libraries (with some exceptions).
+Each module aims to be standalone, copy-pastable, and have no strict dependency on any shared libraries.
 
 ## Modules
 
@@ -19,14 +19,10 @@ Each module aims to be standalone, copy-pastable, and have no strict dependency 
 - **`vk.lua`** - An auto-generated Vulkan binding built with [NattLua](https://github.com/CapsAdmin/NattLua/blob/master/examples/vulkan_bindgen.lua)
 
 - **`cocoa.lua`** - Provides a way to open and receive window events on macOS. This depends on `objc.lua` for bindings.
-
-- **`luajit_debug.lua`** - If you get a segfault, you can use this like `luajit luajit_debug.lua examples/gameoflife.lua` to get a C stacktrace and a lua stacktrace.
-
 ## Usage
 
-See `examples/` and `helpers/` for usage. `helpers/` contains some higher level abstractions for Vulkan as well.
-
-## Run
 `luajit examples/terminal/game_of_life.lua`
 
 `luajit examples/vulkan/game_of_life.lua` (only works on macos at the moment)
+
+If you get a segfault, you can run `luajit luajit_debug.lua examples/gameoflife.lua` to get a C stacktrace and a lua stacktrace.
