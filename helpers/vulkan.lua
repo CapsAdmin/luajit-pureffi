@@ -1585,6 +1585,7 @@ do -- instance
 							width = width,
 							height = height,
 							format = format,
+							usage = usage,
 						},
 						Image
 					)

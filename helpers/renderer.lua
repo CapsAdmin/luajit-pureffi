@@ -470,18 +470,32 @@ function Renderer:UploadToImage(image, data, width, height)
 	)
 	-- Copy buffer to image
 	cmd:CopyBufferToImage(staging_buffer, image, width, height)
-	-- Transition to general layout for compute
+	-- Determine final layout based on image usage
+	local final_layout = "general"
+	local dst_stage = "compute"
+
+	if type(image.usage) == "table" then
+		for _, usage in ipairs(image.usage) do
+			if usage == "sampled" then
+				final_layout = "shader_read_only_optimal"
+				dst_stage = "fragment"
+				break
+			end
+		end
+	end
+
+	-- Transition to final layout
 	cmd:PipelineBarrier(
 		{
 			srcStage = "transfer",
-			dstStage = "compute",
+			dstStage = dst_stage,
 			imageBarriers = {
 				{
 					image = image,
 					srcAccessMask = "transfer_write",
 					dstAccessMask = "shader_read",
 					oldLayout = "transfer_dst_optimal",
-					newLayout = "general",
+					newLayout = final_layout,
 				},
 			},
 		}
