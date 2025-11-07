@@ -110,38 +110,6 @@ local pipeline = renderer:CreatePipeline(
 			},
 		},
 		vertex_buffers = {vertex_buffer},
-		descriptor_sets = {
-			{
-				type = "uniform_buffer",
-				stage = "fragment",
-				binding_index = 0,
-				args = {renderer:CreateBuffer(
-					{
-						byte_size = ffi.sizeof(RGBA),
-						buffer_usage = "uniform_buffer",
-						data = RGBA(1.0, 1.0, 1.0, 1.0),
-					}
-				)}
-			},
-			{
-				type = "uniform_buffer",
-				stage = "fragment",
-				binding_index = 1,
-				args = {renderer:CreateBuffer(
-					{
-						byte_size = ffi.sizeof(RGBA),
-						buffer_usage = "uniform_buffer",
-						data = RGBA(1.0, 1.0, 1.0, 1.0),
-					}
-				)}
-			},
-			{
-				type = "combined_image_sampler",
-				stage = "fragment",
-				binding_index = 2,
-				args = {texture_view, texture_sampler},
-			}
-		},	
 		shader_stages = {
 			{
 				type = "vertex",
@@ -189,6 +157,39 @@ local pipeline = renderer:CreatePipeline(
 							out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier * tex_color;
 						}
 					]],
+				descriptor_sets = {
+					{
+						type = "uniform_buffer",
+						binding_index = 0,
+						args = {
+							renderer:CreateBuffer(
+								{
+									byte_size = ffi.sizeof(RGBA),
+									buffer_usage = "uniform_buffer",
+									data = RGBA(1.0, 1.0, 1.0, 1.0),
+								}
+							),
+						},
+					},
+					{
+						type = "uniform_buffer",
+						binding_index = 1,
+						args = {
+							renderer:CreateBuffer(
+								{
+									byte_size = ffi.sizeof(RGBA),
+									buffer_usage = "uniform_buffer",
+									data = RGBA(1.0, 1.0, 1.0, 1.0),
+								}
+							),
+						},
+					},
+					{
+						type = "combined_image_sampler",
+						binding_index = 2,
+						args = {texture_view, texture_sampler},
+					},
+				},
 			},
 		},
 		rasterizer = {

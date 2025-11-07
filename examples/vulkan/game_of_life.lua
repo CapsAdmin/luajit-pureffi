@@ -203,33 +203,34 @@ local graphics_pipeline = renderer:CreatePipeline(
 	{
 		dynamic_states = {"viewport", "scissor"},
 		input_assembly = {topology = "triangle_list", primitive_restart = false},
-		descriptor_sets = {
-			{
-				type = "storage_image",
-				stage = "fragment",
-				binding_index = 0,
-				args = {
-					storage_image_views[1],
-				},
-			},
-			{
-				type = "uniform_buffer",
-				stage = "fragment",
-				binding_index = 1,
-				args = {
-					renderer:CreateBuffer(
-						{
-							byte_size = ffi.sizeof(UniformData),
-							buffer_usage = "uniform_buffer",
-							data = UniformData({0.0, 0.0, 0.0, 1.0}),
-						}
-					),
-				},
-			},
-		},
 		shader_stages = {
 			{type = "vertex", code = VERTEX_SHADER},
-			{type = "fragment", code = FRAGMENT_SHADER},
+			{
+				type = "fragment",
+				code = FRAGMENT_SHADER,
+				descriptor_sets = {
+					{
+						type = "storage_image",
+						binding_index = 0,
+						args = {
+							storage_image_views[1],
+						},
+					},
+					{
+						type = "uniform_buffer",
+						binding_index = 1,
+						args = {
+							renderer:CreateBuffer(
+								{
+									byte_size = ffi.sizeof(UniformData),
+									buffer_usage = "uniform_buffer",
+									data = UniformData({0.0, 0.0, 0.0, 1.0}),
+								}
+							),
+						},
+					},
+				},
+			},
 		},
 		rasterizer = {
 			depth_clamp = false,

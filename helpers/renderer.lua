@@ -312,28 +312,36 @@ do
 		local renderPass = renderer:CreateRenderPass(samples)
 		renderer:CreateImageViews()
 		renderer:CreateFramebuffers()
+		local shader_modules = {}
 		local layout = {}
 		local pool_sizes = {}
 
-		if config.descriptor_sets then
-			local counts = {}
+		for i, stage in ipairs(config.shader_stages) do
+			shader_modules[i] = {
+				type = stage.type,
+				module = renderer.device:CreateShaderModule(stage.code, stage.type),
+			}
 
-			for i, ds in ipairs(config.descriptor_sets) do
-				layout[i] = {
-					binding_index = ds.binding_index,
-					type = ds.type,
-					stageFlags = ds.stage,
-					count = 1,
-				}
-				counts[ds.type] = (counts[ds.type] or 0) + 1
+			if stage.descriptor_sets then
+				local counts = {}
 
-				if ds.type == "uniform_buffer" then
-					uniform_buffers[ds.binding_index] = ds.args[1]
+				for i, ds in ipairs(stage.descriptor_sets) do
+					layout[i] = {
+						binding_index = ds.binding_index,
+						type = ds.type,
+						stageFlags = stage.type,
+						count = 1,
+					}
+					counts[ds.type] = (counts[ds.type] or 0) + 1
+
+					if ds.type == "uniform_buffer" then
+						uniform_buffers[ds.binding_index] = ds.args[1]
+					end
 				end
-			end
 
-			for type, count in pairs(counts) do
-				table.insert(pool_sizes, {type = type, count = count})
+				for type, count in pairs(counts) do
+					table.insert(pool_sizes, {type = type, count = count})
+				end
 			end
 		end
 
@@ -343,19 +351,12 @@ do
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
 
 		-- Update descriptor sets
-		if config.descriptor_sets then
-			for i, ds in ipairs(config.descriptor_sets) do
-				renderer.device:UpdateDescriptorSet(ds.type, descriptorSet, ds.binding_index, unpack(ds.args))
-			end
-		end
-
-		local shader_modules = {}
-
 		for i, stage in ipairs(config.shader_stages) do
-			shader_modules[i] = {
-				type = stage.type,
-				module = renderer.device:CreateShaderModule(stage.code, stage.type),
-			}
+			if stage.descriptor_sets then
+				for i, ds in ipairs(stage.descriptor_sets) do
+					renderer.device:UpdateDescriptorSet(ds.type, descriptorSet, ds.binding_index, unpack(ds.args))
+				end
+			end
 		end
 
 		pipeline = renderer.device:CreateGraphicsPipeline(
@@ -395,6 +396,7 @@ do
 		if index < 1 or index > #self.uniform_buffers then
 			error("Invalid uniform buffer index: " .. index)
 		end
+
 		local ub = self.uniform_buffers[index]
 		ub:CopyData(data, ub.byte_size)
 	end
@@ -479,6 +481,7 @@ function Renderer:UploadToImage(image, data, width, height)
 			if usage == "sampled" then
 				final_layout = "shader_read_only_optimal"
 				dst_stage = "fragment"
+
 				break
 			end
 		end
