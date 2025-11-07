@@ -346,6 +346,21 @@ do
 			table.insert(pool_sizes, {type = "uniform_buffer", count = #config.uniform_buffers})
 		end
 
+		-- Add textures to layout
+		if config.textures then
+			for i, tex_config in ipairs(config.textures) do
+				layout[binding_index + 1] = {
+					binding = binding_index,
+					type = "combined_image_sampler",
+					stageFlags = tex_config.stage,
+					count = 1,
+				}
+				binding_index = binding_index + 1
+			end
+
+			table.insert(pool_sizes, {type = "combined_image_sampler", count = #config.textures})
+		end
+
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
 		local descriptorPool = renderer.device:CreateDescriptorPool(pool_sizes, 1)
@@ -370,6 +385,19 @@ do
 		if config.uniform_buffers then
 			for i, ub_config in ipairs(config.uniform_buffers) do
 				renderer.device:UpdateDescriptorSet(descriptorSet, binding_index, ub_config.buffer)
+				binding_index = binding_index + 1
+			end
+		end
+
+		-- Bind textures
+		if config.textures then
+			for i, tex_config in ipairs(config.textures) do
+				renderer.device:UpdateDescriptorSet(
+					descriptorSet,
+					binding_index,
+					tex_config.texture,
+					"combined_image_sampler"
+				)
 				binding_index = binding_index + 1
 			end
 		end

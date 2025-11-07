@@ -16,29 +16,61 @@ local renderer = Renderer.New(
 local RGBA = ffi.typeof("float[4]")
 local pipeline
 local VERTEX_BIND_POSITION = 0
+-- Create 32x32 random noise texture
+local texture_size = 32
+local texture_data = ffi.new("uint8_t[?]", texture_size * texture_size * 4)
+math.randomseed(os.time())
+
+for i = 0, texture_size * texture_size * 4 - 1 do
+	texture_data[i] = math.random(0, 255)
+end
+
+local texture_image = renderer.device:CreateImage(
+	texture_size,
+	texture_size,
+	"R8G8B8A8_UNORM",
+	{"sampled", "transfer_dst"},
+	"device_local"
+)
+renderer:UploadToImage(texture_image, texture_data, texture_size, texture_size)
+local texture_view = texture_image:CreateView()
+local texture_sampler = renderer.device:CreateSampler(
+	{
+		min_filter = "nearest",
+		mag_filter = "nearest",
+		wrap_s = "repeat",
+		wrap_t = "repeat",
+	}
+)
 local vertex_buffer = renderer:CreateBuffer(
 	{
 		buffer_usage = "vertex_buffer",
 		data_type = "float",
 		data = {
-			-- bottom-left (red)
+			-- bottom-left (red) + UV (0, 0)
 			0.0, -- x
 			-0.5, -- y
 			1.0, -- r
 			0.0, -- g
 			0.0, -- b
-			-- top (blue)
+			0.0, -- u
+			0.0, -- v
+			-- top (blue) + UV (0.5, 1)
 			0.5,
 			0.5,
 			0.0,
 			1.0,
 			0.0,
-			-- bottom-right (green)
+			0.5,
+			1.0,
+			-- bottom-right (green) + UV (1, 0)
 			-0.5,
 			0.5,
 			0.0,
 			0.0,
 			1.0,
+			1.0,
+			0.0,
 		},
 	}
 )
@@ -53,7 +85,7 @@ local pipeline = renderer:CreatePipeline(
 		vertex_bindings = {
 			{
 				binding = VERTEX_BIND_POSITION,
-				stride = ffi.sizeof("float") * 5, -- vec2 + vec3
+				stride = ffi.sizeof("float") * 7, -- vec2 + vec3 + vec2
 				input_rate = "vertex",
 			},
 		},
@@ -69,6 +101,12 @@ local pipeline = renderer:CreatePipeline(
 				location = 1, -- in_color
 				format = "R32G32B32_SFLOAT", -- vec3
 				offset = ffi.sizeof("float") * 2,
+			},
+			{
+				binding = VERTEX_BIND_POSITION,
+				location = 2, -- in_uv
+				format = "R32G32_SFLOAT", -- vec2
+				offset = ffi.sizeof("float") * 5,
 			},
 		},
 		vertex_buffers = {vertex_buffer},
@@ -94,6 +132,16 @@ local pipeline = renderer:CreatePipeline(
 				),
 			},
 		},
+		textures = {
+			{
+				stage = "fragment",
+				texture = {
+					image = texture_image,
+					view = texture_view,
+					sampler = texture_sampler,
+				},
+			},
+		},
 		shader_stages = {
 			{
 				type = "vertex",
@@ -102,12 +150,15 @@ local pipeline = renderer:CreatePipeline(
 
 						layout(location = 0) in vec2 in_position;
 						layout(location = 1) in vec3 in_color;
-						
+						layout(location = 2) in vec2 in_uv;
+
 						layout(location = 0) out vec3 frag_color;
+						layout(location = 1) out vec2 frag_uv;
 
 						void main() {
 							gl_Position = vec4(in_position, 0.0, 1.0);
 							frag_color = in_color;
+							frag_uv = in_uv;
 						}
 					]],
 			},
@@ -124,14 +175,18 @@ local pipeline = renderer:CreatePipeline(
 							vec4 color_multiplier;
 						} ubo2;
 
+						layout(binding = 2) uniform sampler2D tex_sampler;
+
 						// from vertex shader
 						layout(location = 0) in vec3 frag_color;
+						layout(location = 1) in vec2 frag_uv;
 
 						// output color
 						layout(location = 0) out vec4 out_color;
 
 						void main() {
-							out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier;
+							vec4 tex_color = texture(tex_sampler, frag_uv);
+							out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier * tex_color;
 						}
 					]],
 			},
@@ -205,9 +260,7 @@ while true do
 			os.exit()
 		end
 
-		if event.type == "window_resize" then 
-			renderer:RecreateSwapchain() 
-		end
+		if event.type == "window_resize" then renderer:RecreateSwapchain() end
 	end
 
 	if renderer:BeginFrame() then

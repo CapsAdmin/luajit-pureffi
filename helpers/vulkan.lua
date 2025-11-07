@@ -63,6 +63,10 @@ local enums = translate_enums(
 		{vk.VkImageLayout, "VK_IMAGE_LAYOUT_"},
 		{vk.VkPipelineBindPoint, "VK_PIPELINE_BIND_POINT_"},
 		{vk.VkDynamicState, "VK_DYNAMIC_STATE_"},
+		{vk.VkImageViewType, "VK_IMAGE_VIEW_TYPE_"},
+		{vk.VkFilter, "VK_FILTER_"},
+		{vk.VkSamplerMipmapMode, "VK_SAMPLER_MIPMAP_MODE_"},
+		{vk.VkSamplerAddressMode, "VK_SAMPLER_ADDRESS_MODE_"},
 	}
 )
 -- Export enums for use in applications
@@ -1213,13 +1217,16 @@ do -- instance
 			function Device:UpdateDescriptorSet(descriptorSet, binding, resource, descriptorType)
 				-- Accept both friendly names and VK_ constants for backwards compatibility
 				local isStorageImage = false
+				local isCombinedImageSampler = false
 
 				if descriptorType and not descriptorType:match("^VK_") then
 					isStorageImage = descriptorType == "storage_image"
+					isCombinedImageSampler = descriptorType == "combined_image_sampler"
 					descriptorType = enums.VK_DESCRIPTOR_TYPE_(descriptorType)
 				else
 					descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER"
 					isStorageImage = descriptorType == "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
+					isCombinedImageSampler = descriptorType == "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER"
 				end
 
 				local descriptorWrite = T.Box(
@@ -1234,7 +1241,30 @@ do -- instance
 					}
 				)
 
-				if isStorageImage then
+				if isCombinedImageSampler then
+					-- For combined image sampler, resource can be a Texture or separate view/sampler
+					local imageView, sampler
+
+					if resource.view and resource.sampler then
+						-- Resource is a Texture object
+						imageView = resource.view.ptr[0]
+						sampler = resource.sampler.ptr[0]
+					else
+						-- Resource is {view = ..., sampler = ...}
+						imageView = resource.view
+						sampler = resource.sampler
+					end
+
+					local imageInfo = T.Box(
+						vk.VkDescriptorImageInfo,
+						{
+							sampler = sampler,
+							imageView = imageView,
+							imageLayout = "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL",
+						}
+					)
+					descriptorWrite[0].pImageInfo = imageInfo
+				elseif isStorageImage then
 					local imageInfo = T.Box(
 						vk.VkDescriptorImageInfo,
 						{
@@ -1479,20 +1509,30 @@ do -- instance
 				local ImageView = {}
 				ImageView.__index = ImageView
 
-				function Device:CreateImageView(image, format)
+				function Device:CreateImageView(image, format_or_config)
+					local config
+
+					if type(format_or_config) == "string" then
+						-- Backwards compatibility: simple (image, format) call
+						config = {format = format_or_config}
+					else
+						-- New style: (image, config_table)
+						config = format_or_config or {}
+					end
+
 					local viewInfo = T.Box(
 						vk.VkImageViewCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO",
 							image = image,
-							viewType = "VK_IMAGE_VIEW_TYPE_2D",
-							format = enums.VK_FORMAT_(format),
+							viewType = enums.VK_IMAGE_VIEW_TYPE_(config.view_type or "2d"),
+							format = enums.VK_FORMAT_(config.format),
 							subresourceRange = {
-								aspectMask = vk.VkImageAspectFlagBits("VK_IMAGE_ASPECT_COLOR_BIT"),
-								baseMipLevel = 0,
-								levelCount = 1,
-								baseArrayLayer = 0,
-								layerCount = 1,
+								aspectMask = enums.VK_IMAGE_ASPECT_(config.aspect or "color"),
+								baseMipLevel = config.base_mip_level or 0,
+								levelCount = config.level_count or 1,
+								baseArrayLayer = config.base_array_layer or 0,
+								layerCount = config.layer_count or 1,
 							},
 						}
 					)
@@ -1577,6 +1617,68 @@ do -- instance
 				function Image:__gc()
 					lib.vkDestroyImage(self.device.ptr[0], self.ptr[0], nil)
 					lib.vkFreeMemory(self.device.ptr[0], self.memory[0], nil)
+				end
+			end
+
+			do -- sampler
+				local Sampler = {}
+				Sampler.__index = Sampler
+
+				function Device:CreateSampler(config)
+					config = config or {}
+					-- Default values
+					local min_filter = config.min_filter or "linear"
+					local mag_filter = config.mag_filter or "linear"
+					local mipmap_mode = config.mipmap_mode or "linear"
+					local wrap_s = config.wrap_s or "repeat"
+					local wrap_t = config.wrap_t or "repeat"
+					local wrap_r = config.wrap_r or "repeat"
+					local anisotropy = config.anisotropy or 1.0
+					local max_lod = config.max_lod or 1000.0
+					local samplerInfo = T.Box(
+						vk.VkSamplerCreateInfo,
+						{
+							sType = "VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO",
+							magFilter = enums.VK_FILTER_(mag_filter),
+							minFilter = enums.VK_FILTER_(min_filter),
+							mipmapMode = enums.VK_SAMPLER_MIPMAP_MODE_(mipmap_mode),
+							addressModeU = enums.VK_SAMPLER_ADDRESS_MODE_(wrap_s),
+							addressModeV = enums.VK_SAMPLER_ADDRESS_MODE_(wrap_t),
+							addressModeW = enums.VK_SAMPLER_ADDRESS_MODE_(wrap_r),
+							anisotropyEnable = anisotropy > 1.0 and 1 or 0,
+							maxAnisotropy = anisotropy,
+							borderColor = "VK_BORDER_COLOR_INT_OPAQUE_BLACK",
+							unnormalizedCoordinates = 0,
+							compareEnable = 0,
+							compareOp = "VK_COMPARE_OP_ALWAYS",
+							mipLodBias = 0.0,
+							minLod = 0.0,
+							maxLod = max_lod,
+						}
+					)
+					local ptr = T.Box(vk.VkSampler)()
+					vk_assert(
+						lib.vkCreateSampler(self.ptr[0], samplerInfo, nil, ptr),
+						"failed to create sampler"
+					)
+					return setmetatable(
+						{
+							ptr = ptr,
+							device = self,
+							min_filter = min_filter,
+							mag_filter = mag_filter,
+							mipmap_mode = mipmap_mode,
+							wrap_s = wrap_s,
+							wrap_t = wrap_t,
+							wrap_r = wrap_r,
+							anisotropy = anisotropy,
+						},
+						Sampler
+					)
+				end
+
+				function Sampler:__gc()
+					lib.vkDestroySampler(self.device.ptr[0], self.ptr[0], nil)
 				end
 			end
 
