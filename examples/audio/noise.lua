@@ -1,13 +1,17 @@
 local audio = require("audio")
-local dump = require("helpers.table_print").print
-function audio.callback(buffer, num_samples)
-    for i = 0, num_samples - 1 do
-        buffer[i] = (math.random() * 2.0) - 1.0
-    end
+local threads = require("threads")
+
+local length_ms = 1000
+
+function audio.callback(buffer, num_samples, config)
+	for i = 0, num_samples - 1, 2 do
+		for j = 0, config.channels - 1 do
+			buffer[i + j] = (math.random() * 2.0) - 1
+			buffer[i + j] = (math.random() * 2.0) - 1
+		end
+	end
 end
 
-dump(audio.start())
-
-require("threads").sleep(1000)
-
+audio.start()
+threads.sleep(length_ms)
 audio.stop()
