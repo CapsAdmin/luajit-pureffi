@@ -202,7 +202,6 @@ create_storage_images()
 local graphics_pipeline = renderer:CreatePipeline(
 	{
 		dynamic_states = {"viewport", "scissor"},
-		input_assembly = {topology = "triangle_list", primitive_restart = false},
 		shader_stages = {
 			{type = "vertex", code = VERTEX_SHADER},
 			{

@@ -1772,7 +1772,7 @@ do -- instance
 						bindingArray = T.Array(vk.VkVertexInputBindingDescription)(bindingCount)
 
 						for i, binding in ipairs(config.vertexBindings) do
-							bindingArray[i - 1].binding = binding.binding or (i - 1)
+							bindingArray[i - 1].binding = binding.binding
 							bindingArray[i - 1].stride = binding.stride
 							bindingArray[i - 1].inputRate = enums.VK_VERTEX_INPUT_RATE_(binding.input_rate or "vertex")
 						end
@@ -1784,7 +1784,7 @@ do -- instance
 
 						for i, attr in ipairs(config.vertexAttributes) do
 							attributeArray[i - 1].location = attr.location
-							attributeArray[i - 1].binding = attr.binding or 0
+							attributeArray[i - 1].binding = attr.binding
 							attributeArray[i - 1].format = enums.VK_FORMAT_(attr.format)
 							attributeArray[i - 1].offset = attr.offset
 						end

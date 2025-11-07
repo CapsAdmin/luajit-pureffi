@@ -349,7 +349,9 @@ do
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
 		local descriptorPool = renderer.device:CreateDescriptorPool(pool_sizes, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
-
+		local vertex_bindings
+		local vertex_attributes
+		local vertex_buffers
 		-- Update descriptor sets
 		for i, stage in ipairs(config.shader_stages) do
 			if stage.descriptor_sets then
@@ -357,14 +359,20 @@ do
 					renderer.device:UpdateDescriptorSet(ds.type, descriptorSet, ds.binding_index, unpack(ds.args))
 				end
 			end
+
+			if stage.type == "vertex" then
+				vertex_bindings = stage.bindings
+				vertex_attributes = stage.attributes
+				vertex_buffers = stage.buffers
+			end
 		end
 
 		pipeline = renderer.device:CreateGraphicsPipeline(
 			{
 				shaderModules = shader_modules,
 				extent = config.extent,
-				vertexBindings = config.vertex_bindings,
-				vertexAttributes = config.vertex_attributes,
+				vertexBindings = vertex_bindings,
+				vertexAttributes = vertex_attributes,
 				input_assembly = config.input_assembly,
 				rasterizer = config.rasterizer,
 				viewport = config.viewport,
@@ -377,7 +385,7 @@ do
 			pipelineLayout
 		)
 		self.pipeline = pipeline
-		self.vertex_buffers = config.vertex_buffers
+		self.vertex_buffers = vertex_buffers
 		self.descriptor_sets = {descriptorSet}
 		self.pipeline_layout = pipelineLayout
 		self.renderer = renderer

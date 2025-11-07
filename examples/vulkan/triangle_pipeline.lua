@@ -78,85 +78,85 @@ local vertex_buffer = renderer:CreateBuffer(
 local pipeline = renderer:CreatePipeline(
 	{
 		dynamic_states = {"viewport", "scissor"},
-		input_assembly = {
-			topology = "triangle_list",
-			primitive_restart = false,
-		},
-		vertex_bindings = {
-			{
-				binding = VERTEX_BIND_POSITION,
-				stride = ffi.sizeof("float") * 7, -- vec2 + vec3 + vec2
-				input_rate = "vertex",
-			},
-		},
-		vertex_attributes = {
-			{
-				binding = VERTEX_BIND_POSITION,
-				location = 0, -- in_position
-				format = "R32G32_SFLOAT", -- vec2
-				offset = 0,
-			},
-			{
-				binding = VERTEX_BIND_POSITION,
-				location = 1, -- in_color
-				format = "R32G32B32_SFLOAT", -- vec3
-				offset = ffi.sizeof("float") * 2,
-			},
-			{
-				binding = VERTEX_BIND_POSITION,
-				location = 2, -- in_uv
-				format = "R32G32_SFLOAT", -- vec2
-				offset = ffi.sizeof("float") * 5,
-			},
-		},
-		vertex_buffers = {vertex_buffer},
 		shader_stages = {
 			{
 				type = "vertex",
 				code = [[
-						#version 450
+					#version 450
 
-						layout(location = 0) in vec2 in_position;
-						layout(location = 1) in vec3 in_color;
-						layout(location = 2) in vec2 in_uv;
+					layout(location = 0) in vec2 in_position;
+					layout(location = 1) in vec3 in_color;
+					layout(location = 2) in vec2 in_uv;
 
-						layout(location = 0) out vec3 frag_color;
-						layout(location = 1) out vec2 frag_uv;
+					layout(location = 0) out vec3 frag_color;
+					layout(location = 1) out vec2 frag_uv;
 
-						void main() {
-							gl_Position = vec4(in_position, 0.0, 1.0);
-							frag_color = in_color;
-							frag_uv = in_uv;
-						}
-					]],
+					void main() {
+						gl_Position = vec4(in_position, 0.0, 1.0);
+						frag_color = in_color;
+						frag_uv = in_uv;
+					}
+				]],
+				bindings = {
+					{
+						binding = VERTEX_BIND_POSITION,
+						stride = ffi.sizeof("float") * 7, -- vec2 + vec3 + vec2
+						input_rate = "vertex",
+					},
+				},
+				attributes = {
+					{
+						binding = VERTEX_BIND_POSITION,
+						location = 0, -- in_position
+						format = "R32G32_SFLOAT", -- vec2
+						offset = 0,
+					},
+					{
+						binding = VERTEX_BIND_POSITION,
+						location = 1, -- in_color
+						format = "R32G32B32_SFLOAT", -- vec3
+						offset = ffi.sizeof("float") * 2,
+					},
+					{
+						binding = VERTEX_BIND_POSITION,
+						location = 2, -- in_uv
+						format = "R32G32_SFLOAT", -- vec2
+						offset = ffi.sizeof("float") * 5,
+					},
+				},
+				input_assembly = {
+					topology = "triangle_list",
+					primitive_restart = false,
+				},
+				buffers = {vertex_buffer},
 			},
 			{
 				type = "fragment",
 				code = [[
-						#version 450
+					#version 450
 
-						layout(binding = 0) uniform ColorUniform1 {
-							vec4 color_multiplier;
-						} ubo1;
+					layout(binding = 0) uniform ColorUniform1 {
+						vec4 color_multiplier;
+					} ubo1;
 
-						layout(binding = 1) uniform ColorUniform2 {
-							vec4 color_multiplier;
-						} ubo2;
+					layout(binding = 1) uniform ColorUniform2 {
+						vec4 color_multiplier;
+					} ubo2;
 
-						layout(binding = 2) uniform sampler2D tex_sampler;
+					layout(binding = 2) uniform sampler2D tex_sampler;
 
-						// from vertex shader
-						layout(location = 0) in vec3 frag_color;
-						layout(location = 1) in vec2 frag_uv;
+					// from vertex shader
+					layout(location = 0) in vec3 frag_color;
+					layout(location = 1) in vec2 frag_uv;
 
-						// output color
-						layout(location = 0) out vec4 out_color;
+					// output color
+					layout(location = 0) out vec4 out_color;
 
-						void main() {
-							vec4 tex_color = texture(tex_sampler, frag_uv);
-							out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier * tex_color;
-						}
-					]],
+					void main() {
+						vec4 tex_color = texture(tex_sampler, frag_uv);
+						out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier * tex_color;
+					}
+				]],
 				descriptor_sets = {
 					{
 						type = "uniform_buffer",
