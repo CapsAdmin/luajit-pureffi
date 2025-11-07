@@ -50,12 +50,7 @@ function Renderer:Initialize(metal_surface)
 	self.command_pool = self.device:CreateCommandPool(self.graphics_queue_family)
 	-- Get queue
 	self.queue = self.device:GetQueue(self.graphics_queue_family)
-	-- Initialize render pass and framebuffer management
-	self.render_pass = nil
-	self.image_views = {}
-	self.framebuffers = {}
-	self.current_frame = 0
-	-- Create swapchain and related resources
+	-- Create swapchain
 	self:RecreateSwapchain()
 	return self
 end
@@ -101,194 +96,150 @@ function Renderer:RecreateSwapchain()
 		swapchain_config,
 		self.swapchain -- old swapchain for efficient recreation (nil on initial creation)
 	)
-	local old_count = self.swapchain_images and #self.swapchain_images or 0
 	self.swapchain_images = self.swapchain:GetImages()
+end
 
-	if old_count ~= #self.swapchain_images then
-		self.command_buffers = {}
-		self.image_available_semaphores = {}
-		self.render_finished_semaphores = {}
-		self.in_flight_fences = {}
+do
+	local OffscreenRenderTarget = {}
+	OffscreenRenderTarget.__index = OffscreenRenderTarget
 
-		for i = 1, #self.swapchain_images do
-			self.command_buffers[i] = self.command_pool:CreateCommandBuffer()
-			self.image_available_semaphores[i] = self.device:CreateSemaphore()
-			self.render_finished_semaphores[i] = self.device:CreateSemaphore()
-			self.in_flight_fences[i] = self.device:CreateFence()
-		end
-
-		self.current_frame = 0
+	function OffscreenRenderTarget.New(renderer, width, height, format, config)
+		config = config or {}
+		local usage = config.usage or {"color_attachment", "sampled"}
+		local samples = config.samples or "1"
+		local final_layout = config.final_layout or "color_attachment_optimal"
+		local self = setmetatable({}, OffscreenRenderTarget)
+		self.renderer = renderer
+		self.width = width
+		self.height = height
+		self.format = format
+		self.final_layout = final_layout
+		-- Create the image
+		self.image = renderer.device:CreateImage(width, height, format, usage, "device_local", samples)
+		-- Create image view
+		self.image_view = self.image:CreateView()
+		-- Create render pass for this format (with offscreen-appropriate final layout)
+		self.render_pass = renderer.device:CreateRenderPass({format = format, color_space = "srgb_nonlinear"}, samples, final_layout)
+		-- Create framebuffer
+		self.framebuffer = renderer.device:CreateFramebuffer(self.render_pass, self.image_view.ptr[0], width, height, nil)
+		-- Create command pool and buffer for offscreen rendering
+		self.command_pool = renderer.device:CreateCommandPool(renderer.graphics_queue_family)
+		self.command_buffer = self.command_pool:CreateCommandBuffer()
+		return self
 	end
 
-	-- Recreate image views if they were created before
-	if self.render_pass then
-		self:CreateImageViews()
-		self:CreateFramebuffers()
+	function OffscreenRenderTarget:GetImageView()
+		return self.image_view
 	end
 
-	if self.OnRecreateSwapchain then self:OnRecreateSwapchain() end
-end
+	function OffscreenRenderTarget:GetRenderPass()
+		return self.render_pass
+	end
 
-function Renderer:CreateRenderPass(samples)
-	if self.render_pass then return self.render_pass end
-
-	self.msaa_samples = samples or "1"
-	self.render_pass = self.device:CreateRenderPass(self.surface_formats[self.config.surface_format_index], self.msaa_samples)
-	return self.render_pass
-end
-
-function Renderer:BeginRenderPass(clear_color)
-	local command_buffer = self:GetCommandBuffer()
-	command_buffer:BeginRenderPass(self.render_pass, self:GetFramebuffer(), self:GetExtent(), clear_color)
-	return command_buffer
-end
-
-function Renderer:CreateImageViews()
-	self.image_views = {}
-
-	for _, swapchain_image in ipairs(self.swapchain_images) do
-		table.insert(
-			self.image_views,
-			self.device:CreateImageView(swapchain_image, self.surface_formats[self.config.surface_format_index].format)
+	function OffscreenRenderTarget:WriteMode(cmd)
+		cmd:PipelineBarrier(
+			{
+				srcStage = "fragment",
+				dstStage = "all_commands",
+				imageBarriers = {
+					{
+						image = self.image,
+						srcAccessMask = "shader_read",
+						dstAccessMask = "color_attachment_write",
+						oldLayout = "shader_read_only_optimal",
+						newLayout = "color_attachment_optimal",
+					},
+				},
+			}
 		)
 	end
 
-	-- Create MSAA resources if needed
-	if self.msaa_samples and self.msaa_samples ~= "1" then
-		self:CreateMSAAResources()
+	function OffscreenRenderTarget:ReadMode(cmd)
+		cmd:PipelineBarrier(
+			{
+				srcStage = "all_commands",
+				dstStage = "fragment",
+				imageBarriers = {
+					{
+						image = self.image,
+						srcAccessMask = "color_attachment_write",
+						dstAccessMask = "shader_read",
+						oldLayout = "color_attachment_optimal",
+						newLayout = "shader_read_only_optimal",
+					},
+				},
+			}
+		)
+	end
+
+	function OffscreenRenderTarget:BeginFrame()
+		self.command_buffer:Reset()
+		self.command_buffer:Begin()
+		return true
+	end
+
+	function OffscreenRenderTarget:EndFrame()
+		self.command_buffer:End()
+		local fence = self.renderer.device:CreateFence()
+		self.renderer.queue:SubmitAndWait(self.renderer.device, self.command_buffer, fence)
+	end
+
+	function OffscreenRenderTarget:GetCommandBuffer()
+		return self.command_buffer
+	end
+
+	function OffscreenRenderTarget:GetFramebuffer()
+		return self.framebuffer
+	end
+
+	function OffscreenRenderTarget:GetExtent()
+		return {width = self.width, height = self.height}
+	end
+
+	function Renderer:CreateOffscreenRenderTarget(width, height, format, config)
+		return OffscreenRenderTarget.New(self, width, height, format, config)
 	end
 end
 
-function Renderer:CreateMSAAResources()
-	local extent = self.surface_capabilities[0].currentExtent
-	local format = self.surface_formats[self.config.surface_format_index].format
+function Renderer:TransitionImageLayout(image, old_layout, new_layout, src_stage, dst_stage)
+	local cmd = self:GetCommandBuffer()
+	src_stage = src_stage or "all_commands"
+	dst_stage = dst_stage or "all_commands"
+	local src_access = "none"
+	local dst_access = "none"
 
-	-- Clean up old MSAA resources if they exist
-	if self.msaa_images then
-		for _, img in ipairs(self.msaa_images) do
-
-		-- Images are garbage collected automatically
-		end
+	-- Determine access masks based on layouts
+	if old_layout == "color_attachment_optimal" then
+		src_access = "color_attachment_write"
+	elseif old_layout == "shader_read_only_optimal" then
+		src_access = "shader_read"
 	end
 
-	self.msaa_images = {}
-	self.msaa_image_views = {}
-
-	-- Create one MSAA image/view per swapchain image
-	for i = 1, #self.swapchain_images do
-		local msaa_image = self.device:CreateImage(
-			extent.width,
-			extent.height,
-			format,
-			{"color_attachment", "transient_attachment"},
-			"device_local",
-			self.msaa_samples
-		)
-		local msaa_image_view = msaa_image:CreateView()
-		table.insert(self.msaa_images, msaa_image)
-		table.insert(self.msaa_image_views, msaa_image_view)
-	end
-end
-
-function Renderer:CreateFramebuffers()
-	if not self.render_pass then
-		error("Render pass must be created before framebuffers")
+	if new_layout == "color_attachment_optimal" then
+		dst_access = "color_attachment_write"
+	elseif new_layout == "shader_read_only_optimal" then
+		dst_access = "shader_read"
 	end
 
-	if #self.image_views == 0 then
-		error("Image views must be created before framebuffers")
-	end
-
-	local extent = self.surface_capabilities[0].currentExtent
-	self.framebuffers = {}
-
-	for i, imageView in ipairs(self.image_views) do
-		local msaa_view = nil
-
-		if self.msaa_image_views and #self.msaa_image_views > 0 then
-			msaa_view = self.msaa_image_views[i].ptr[0]
-		end
-
-		table.insert(
-			self.framebuffers,
-			self.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height, msaa_view)
-		)
-	end
+	cmd:PipelineBarrier(
+		{
+			srcStage = src_stage,
+			dstStage = dst_stage,
+			imageBarriers = {
+				{
+					image = image,
+					srcAccessMask = src_access,
+					dstAccessMask = dst_access,
+					oldLayout = old_layout,
+					newLayout = new_layout,
+				},
+			},
+		}
+	)
 end
 
 function Renderer:GetExtent()
 	return self.surface_capabilities[0].currentExtent
-end
-
-function Renderer:BeginFrame()
-	-- Use round-robin frame index
-	self.current_frame = (self.current_frame % #self.swapchain_images) + 1
-	-- Wait for the fence for this frame FIRST (ensures previous use of this frame's resources is complete)
-	self.in_flight_fences[self.current_frame]:Wait()
-	-- Acquire next image (after waiting on fence)
-	local image_index = self.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
-
-	-- Check if swapchain needs recreation
-	if image_index == nil then
-		self:RecreateSwapchain()
-		return nil
-	end
-
-	self.image_index = image_index + 1
-	-- Reset and begin command buffer for this frame
-	self.command_buffers[self.current_frame]:Reset()
-	self.command_buffers[self.current_frame]:Begin()
-	return true
-end
-
-function Renderer:BeginPipelineBarrier()
-	self.barrier = self.command_buffer:CreateImageMemoryBarrier(self.image_index, self.swapchain_images)
-	self.command_buffer:StartPipelineBarrier(self.barrier)
-end
-
-function Renderer:EndPipelineBarrier()
-	self.command_buffer:EndPipelineBarrier(self.barrier)
-end
-
-function Renderer:GetCommandBuffer()
-	return self.command_buffers[self.current_frame]
-end
-
-function Renderer:GetSwapChainImage()
-	return self.swapchain_images[self.image_index]
-end
-
-function Renderer:GetFramebuffer()
-	return self.framebuffers[self.image_index]
-end
-
-function Renderer:EndFrame()
-	local command_buffer = self.command_buffers[self.current_frame]
-	command_buffer:End()
-	-- Submit command buffer with current frame's semaphores
-	self.queue:Submit(
-		command_buffer,
-		self.image_available_semaphores[self.current_frame],
-		self.render_finished_semaphores[self.current_frame],
-		self.in_flight_fences[self.current_frame]
-	)
-
-	-- Recreate swapchain if needed
-	if
-		not self.swapchain:Present(self.render_finished_semaphores[self.current_frame], self.queue, ffi.new("uint32_t[1]", self.image_index - 1))
-	then
-		self:RecreateSwapchain()
-	end
-
-	return present_status
-end
-
-function Renderer:NeedsRecreation()
-	-- Check if current extent has changed
-	local new_capabilities = self.physical_device:GetSurfaceCapabilities(self.surface)
-	local old_extent = self.surface_capabilities[0].currentExtent
-	local new_extent = new_capabilities[0].currentExtent
-	return old_extent.width ~= new_extent.width or old_extent.height ~= new_extent.height
 end
 
 function Renderer:WaitForIdle()
@@ -302,16 +253,6 @@ do
 	function Pipeline.New(renderer, config)
 		local self = setmetatable({}, Pipeline)
 		local uniform_buffers = {}
-		-- Extract sample count from multisampling config
-		local samples = "1"
-
-		if config.multisampling and config.multisampling.rasterization_samples then
-			samples = config.multisampling.rasterization_samples
-		end
-
-		local renderPass = renderer:CreateRenderPass(samples)
-		renderer:CreateImageViews()
-		renderer:CreateFramebuffers()
 		local shader_modules = {}
 		local layout = {}
 		local pool_sizes = {}
@@ -352,6 +293,7 @@ do
 		local vertex_bindings
 		local vertex_attributes
 		local vertex_buffers
+
 		-- Update descriptor sets
 		for i, stage in ipairs(config.shader_stages) do
 			if stage.descriptor_sets then
@@ -381,7 +323,7 @@ do
 				color_blend = config.color_blend,
 				dynamic_states = config.dynamic_states,
 			},
-			{renderPass},
+			{config.render_pass},
 			pipelineLayout
 		)
 		self.pipeline = pipeline
@@ -400,13 +342,14 @@ do
 		self.renderer.device:UpdateDescriptorSet(type, self.descriptor_sets[index], binding_index, ...)
 	end
 
-	function Pipeline:UpdateUniformBuffer(index, data)
-		if index < 1 or index > #self.uniform_buffers then
-			error("Invalid uniform buffer index: " .. index)
+	function Pipeline:UpdateUniformBuffer(binding_index, data)
+		local ub = self.uniform_buffers[binding_index]
+
+		if not ub then
+			error("Invalid uniform buffer binding index: " .. binding_index)
 		end
 
-		local ub = self.uniform_buffers[index]
-		ub:CopyData(data, ub.byte_size)
+		ub:CopyData(data, ub.size)
 	end
 
 	function Pipeline:UpdateVertexBuffer(index, data)
@@ -427,7 +370,6 @@ do
 	end
 
 	function Pipeline:Bind(cmd)
-		local cmd = self.renderer:GetCommandBuffer()
 		cmd:BindPipeline(self.pipeline, "graphics")
 		cmd:BindDescriptorSets("graphics", self.pipeline_layout, self.descriptor_sets, 0)
 	end
@@ -515,6 +457,168 @@ function Renderer:UploadToImage(image, data, width, height)
 	-- Submit and wait
 	local fence = self.device:CreateFence()
 	self.queue:SubmitAndWait(self.device, cmd, fence)
+end
+
+do
+	local WindowRenderTarget = {}
+	WindowRenderTarget.__index = WindowRenderTarget
+
+	function WindowRenderTarget.New(renderer)
+		local self = setmetatable({}, WindowRenderTarget)
+		self.renderer = renderer
+		self.current_frame = 0
+		-- Create render pass for swapchain format
+		self.render_pass = renderer.device:CreateRenderPass(renderer.surface_formats[renderer.config.surface_format_index])
+		-- Create image views for swapchain images
+		self.image_views = {}
+
+		for _, swapchain_image in ipairs(renderer.swapchain_images) do
+			table.insert(
+				self.image_views,
+				renderer.device:CreateImageView(
+					swapchain_image,
+					renderer.surface_formats[renderer.config.surface_format_index].format
+				)
+			)
+		end
+
+		-- Create framebuffers
+		local extent = renderer.surface_capabilities[0].currentExtent
+		self.framebuffers = {}
+
+		for i, imageView in ipairs(self.image_views) do
+			table.insert(
+				self.framebuffers,
+				renderer.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height)
+			)
+		end
+
+		-- Initialize per-frame resources
+		self.command_buffers = {}
+		self.image_available_semaphores = {}
+		self.render_finished_semaphores = {}
+		self.in_flight_fences = {}
+
+		for i = 1, #renderer.swapchain_images do
+			self.command_buffers[i] = renderer.command_pool:CreateCommandBuffer()
+			self.image_available_semaphores[i] = renderer.device:CreateSemaphore()
+			self.render_finished_semaphores[i] = renderer.device:CreateSemaphore()
+			self.in_flight_fences[i] = renderer.device:CreateFence()
+		end
+
+		return self
+	end
+
+	function WindowRenderTarget:GetRenderPass()
+		return self.render_pass
+	end
+
+	function WindowRenderTarget:BeginFrame()
+		-- Use round-robin frame index
+		self.current_frame = (self.current_frame % #self.renderer.swapchain_images) + 1
+		-- Wait for the fence for this frame FIRST
+		self.in_flight_fences[self.current_frame]:Wait()
+		-- Acquire next image
+		local image_index = self.renderer.swapchain:GetNextImage(self.image_available_semaphores[self.current_frame])
+
+		-- Check if swapchain needs recreation
+		if image_index == nil then
+			self:RecreateSwapchain()
+			return nil
+		end
+
+		self.image_index = image_index + 1
+		-- Reset and begin command buffer for this frame
+		self.command_buffers[self.current_frame]:Reset()
+		self.command_buffers[self.current_frame]:Begin()
+		return true
+	end
+
+	function WindowRenderTarget:EndFrame()
+		local command_buffer = self.command_buffers[self.current_frame]
+		command_buffer:End()
+		-- Submit command buffer with current frame's semaphores
+		self.renderer.queue:Submit(
+			command_buffer,
+			self.image_available_semaphores[self.current_frame],
+			self.render_finished_semaphores[self.current_frame],
+			self.in_flight_fences[self.current_frame]
+		)
+
+		-- Present and recreate swapchain if needed
+		if
+			not self.renderer.swapchain:Present(
+				self.render_finished_semaphores[self.current_frame],
+				self.renderer.queue,
+				ffi.new("uint32_t[1]", self.image_index - 1)
+			)
+		then
+			self:RecreateSwapchain()
+		end
+	end
+
+	function WindowRenderTarget:RecreateSwapchain()
+		self.renderer:RecreateSwapchain()
+		-- Recreate image views
+		self.image_views = {}
+
+		for _, swapchain_image in ipairs(self.renderer.swapchain_images) do
+			table.insert(
+				self.image_views,
+				self.renderer.device:CreateImageView(
+					swapchain_image,
+					self.renderer.surface_formats[self.renderer.config.surface_format_index].format
+				)
+			)
+		end
+
+		-- Recreate framebuffers
+		local extent = self.renderer.surface_capabilities[0].currentExtent
+		self.framebuffers = {}
+
+		for i, imageView in ipairs(self.image_views) do
+			table.insert(
+				self.framebuffers,
+				self.renderer.device:CreateFramebuffer(self.render_pass, imageView.ptr[0], extent.width, extent.height)
+			)
+		end
+
+		-- Recreate per-frame resources if image count changed
+		local new_count = #self.renderer.swapchain_images
+		local old_count = #self.command_buffers
+
+		if old_count ~= new_count then
+			self.command_buffers = {}
+			self.image_available_semaphores = {}
+			self.render_finished_semaphores = {}
+			self.in_flight_fences = {}
+
+			for i = 1, new_count do
+				self.command_buffers[i] = self.renderer.command_pool:CreateCommandBuffer()
+				self.image_available_semaphores[i] = self.renderer.device:CreateSemaphore()
+				self.render_finished_semaphores[i] = self.renderer.device:CreateSemaphore()
+				self.in_flight_fences[i] = self.renderer.device:CreateFence()
+			end
+
+			self.current_frame = 0
+		end
+	end
+
+	function WindowRenderTarget:GetCommandBuffer()
+		return self.command_buffers[self.current_frame]
+	end
+
+	function WindowRenderTarget:GetFramebuffer()
+		return self.framebuffers[self.image_index]
+	end
+
+	function WindowRenderTarget:GetExtent()
+		return self.renderer:GetExtent()
+	end
+
+	function Renderer:CreateWindowRenderTarget()
+		return WindowRenderTarget.New(self)
+	end
 end
 
 do

@@ -1226,7 +1226,6 @@ do -- instance
 						descriptorCount = 1,
 					}
 				)
-
 				local descriptor_info = nil
 
 				if type == "uniform_buffer" then
@@ -1324,8 +1323,9 @@ do -- instance
 				local RenderPass = {}
 				RenderPass.__index = RenderPass
 
-				function Device:CreateRenderPass(surfaceFormat, samples)
+				function Device:CreateRenderPass(surfaceFormat, samples, final_layout)
 					samples = samples or "1"
+					final_layout = final_layout or "present_src_khr"
 					local attachments
 					local attachment_count
 
@@ -1341,7 +1341,7 @@ do -- instance
 								stencilLoadOp = "VK_ATTACHMENT_LOAD_OP_DONT_CARE",
 								stencilStoreOp = "VK_ATTACHMENT_STORE_OP_DONT_CARE",
 								initialLayout = "VK_IMAGE_LAYOUT_UNDEFINED",
-								finalLayout = "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
+								finalLayout = enums.VK_IMAGE_LAYOUT_(final_layout),
 							}
 						)
 					else

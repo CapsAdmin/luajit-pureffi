@@ -14,6 +14,9 @@ local renderer = Renderer.New(
 		composite_alpha = "opaque",
 	}
 )
+-- Create window render target for explicit rendering to the window
+local window_target = renderer:CreateWindowRenderTarget()
+
 -- Game of Life configuration
 local WORKGROUP_SIZE = 16
 local GAME_WIDTH, GAME_HEIGHT -- Will be set based on window size
@@ -201,6 +204,7 @@ local compute_pipeline = renderer:CreateComputePipeline(
 create_storage_images()
 local graphics_pipeline = renderer:CreatePipeline(
 	{
+		render_pass = window_target:GetRenderPass(),
 		dynamic_states = {"viewport", "scissor"},
 		shader_stages = {
 			{type = "vertex", code = VERTEX_SHADER},
@@ -257,8 +261,7 @@ local graphics_pipeline = renderer:CreatePipeline(
 	}
 )
 
-function renderer:OnRecreateSwapchain()
-	create_storage_images()
+local function update_descriptor_sets()
 	-- Update compute pipeline descriptor sets
 	compute_pipeline:UpdateDescriptorSet("storage_image", 1, 0, storage_image_views[1])
 	compute_pipeline:UpdateDescriptorSet("storage_image", 1, 1, storage_image_views[2])
@@ -268,7 +271,7 @@ function renderer:OnRecreateSwapchain()
 	graphics_pipeline:UpdateDescriptorSet("storage_image", 1, 0, storage_image_views[1])
 end
 
-renderer:OnRecreateSwapchain()
+update_descriptor_sets()
 wnd:Initialize()
 wnd:OpenWindow()
 -- Simulation state
@@ -296,7 +299,11 @@ while true do
 			os.exit()
 		end
 
-		if event.type == "window_resize" then renderer:RecreateSwapchain() end
+		if event.type == "window_resize" then
+			window_target:RecreateSwapchain()
+			create_storage_images()
+			update_descriptor_sets()
+		end
 
 		-- Handle keyboard input
 		if event.type == "key_press" then
@@ -305,14 +312,14 @@ while true do
 				print(paused and "Paused" or "Resumed")
 			elseif event.key == "r" then
 				create_storage_images()
-				renderer:OnRecreateSwapchain()
+				update_descriptor_sets()
 				print("Reset to random state")
 			end
 		end
 	end
 
-	if renderer:BeginFrame() then
-		local cmd = renderer:GetCommandBuffer()
+	if window_target:BeginFrame() then
+		local cmd = window_target:GetCommandBuffer()
 
 		-- Run compute shader (only if not paused)
 		if not paused then
@@ -349,14 +356,19 @@ while true do
 			1.2,
 		}))
 		-- Render fullscreen quad
-		cmd = renderer:BeginRenderPass(ffi.new("float[4]", {0.0, 0.0, 0.0, 1.0}))
+		cmd:BeginRenderPass(
+			window_target:GetRenderPass(),
+			window_target:GetFramebuffer(),
+			window_target:GetExtent(),
+			ffi.new("float[4]", {0.0, 0.0, 0.0, 1.0})
+		)
 		graphics_pipeline:Bind(cmd)
-		local extent = renderer:GetExtent()
+		local extent = window_target:GetExtent()
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
 		cmd:SetScissor(0, 0, extent.width, extent.height)
 		cmd:Draw(6, 1, 0, 0)
 		cmd:EndRenderPass()
-		renderer:EndFrame()
+		window_target:EndFrame()
 	end
 
 	threads.sleep(16)

@@ -4,6 +4,8 @@ local threads = require("threads")
 local Renderer = require("helpers.renderer")
 local shaderc = require("shaderc")
 local wnd = cocoa.window()
+local RGBA = ffi.typeof("float[4]")
+
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
@@ -13,27 +15,144 @@ local renderer = Renderer.New(
 		composite_alpha = "opaque",
 	}
 )
-local RGBA = ffi.typeof("float[4]")
-local pipeline
-local VERTEX_BIND_POSITION = 0
--- Create 32x32 random noise texture
-local texture_size = 32
-local texture_data = ffi.new("uint8_t[?]", texture_size * texture_size * 4)
-math.randomseed(os.time())
+local window_target = renderer:CreateWindowRenderTarget()
+local offscreen_target = renderer:CreateOffscreenRenderTarget(
+	32,
+	32,
+	"R8G8B8A8_UNORM",
+	{
+		usage = {"color_attachment", "sampled"},
+		final_layout = "color_attachment_optimal",
+	}
+)
+local noise_pipeline = renderer:CreatePipeline(
+	{
+		render_pass = offscreen_target:GetRenderPass(),
+		shader_stages = {
+			{
+				type = "vertex",
+				code = [[
+					#version 450
 
-for i = 0, texture_size * texture_size * 4 - 1 do
-	texture_data[i] = math.random(0, 255)
+					// Full-screen triangle
+					vec2 positions[3] = vec2[](
+						vec2(-1.0, -1.0),
+						vec2( 3.0, -1.0),
+						vec2(-1.0,  3.0)
+					);
+
+					layout(location = 0) out vec2 frag_uv;
+
+					void main() {
+						vec2 pos = positions[gl_VertexIndex];
+						gl_Position = vec4(pos, 0.0, 1.0);
+						frag_uv = pos * 0.5 + 0.5;
+					}
+				]],
+				input_assembly = {
+					topology = "triangle_list",
+					primitive_restart = false,
+				},
+			},
+			{
+				type = "fragment",
+				code = [[
+					#version 450
+
+					layout(binding = 0) uniform NoiseParams {
+						float seed;
+					} params;
+
+					layout(location = 0) in vec2 frag_uv;
+					layout(location = 0) out vec4 out_color;
+
+					// Simple hash function for noise
+					float hash(vec2 p) {
+						p = fract(p * vec2(123.34, 456.21));
+						p += dot(p, p + 34.23);
+						return fract(p.x * p.y);
+					}
+
+					void main() {
+						vec2 uv = frag_uv * 1000 + params.seed;
+						float noise = hash(floor(uv));
+						out_color = vec4(vec3(noise), 1.0);
+					}
+				]],
+				descriptor_sets = {
+					{
+						type = "uniform_buffer",
+						binding_index = 0,
+						args = {
+							renderer:CreateBuffer(
+								{
+									byte_size = ffi.sizeof("float"),
+									buffer_usage = "uniform_buffer",
+									data = ffi.new("float[1]", math.random() * 1000.0),
+								}
+							),
+						},
+					},
+				},
+			},
+		},
+		rasterizer = {
+			depth_clamp = false,
+			discard = false,
+			polygon_mode = "fill",
+			line_width = 1.0,
+			cull_mode = "none",
+			front_face = "clockwise",
+			depth_bias = 0,
+		},
+		color_blend = {
+			logic_op_enabled = false,
+			logic_op = "copy",
+			constants = {0.0, 0.0, 0.0, 0.0},
+			attachments = {
+				{
+					blend = false,
+					color_write_mask = {"r", "g", "b", "a"},
+				},
+			},
+		},
+		multisampling = {
+			sample_shading = false,
+			rasterization_samples = "1",
+		},
+		depth_stencil = {
+			depth_test = false,
+			depth_write = false,
+			depth_compare_op = "less",
+			depth_bounds_test = false,
+			stencil_test = false,
+		},
+	}
+)
+
+local function update_noise_texture()
+	offscreen_target:BeginFrame()
+	local cmd = offscreen_target:GetCommandBuffer()
+				noise_pipeline:UpdateUniformBuffer(0, ffi.new("float[1]", math.random() * 1000.0))
+
+	cmd:BeginRenderPass(
+		offscreen_target:GetRenderPass(),
+		offscreen_target:GetFramebuffer(),
+		offscreen_target:GetExtent(),
+		RGBA(0, 0, 0, 1)
+	)
+	noise_pipeline:Bind(cmd)
+	local extent = offscreen_target:GetExtent()
+	cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
+	cmd:SetScissor(0, 0, extent.width, extent.height)
+	cmd:Draw(3, 1, 0, 0)
+	cmd:EndRenderPass()
+	offscreen_target:ReadMode(cmd)
+	offscreen_target:EndFrame()
 end
 
-local texture_image = renderer.device:CreateImage(
-	texture_size,
-	texture_size,
-	"R8G8B8A8_UNORM",
-	{"sampled", "transfer_dst"},
-	"device_local"
-)
-renderer:UploadToImage(texture_image, texture_data, texture_size, texture_size)
-local texture_view = texture_image:CreateView()
+update_noise_texture()
+
 local texture_sampler = renderer.device:CreateSampler(
 	{
 		min_filter = "nearest",
@@ -75,8 +194,9 @@ local vertex_buffer = renderer:CreateBuffer(
 	}
 )
 -- Create pipeline once at startup with dynamic viewport/scissor
-local pipeline = renderer:CreatePipeline(
+local graphics_pipeline = renderer:CreatePipeline(
 	{
+		render_pass = window_target:GetRenderPass(),
 		dynamic_states = {"viewport", "scissor"},
 		shader_stages = {
 			{
@@ -99,26 +219,26 @@ local pipeline = renderer:CreatePipeline(
 				]],
 				bindings = {
 					{
-						binding = VERTEX_BIND_POSITION,
+						binding = 0,
 						stride = ffi.sizeof("float") * 7, -- vec2 + vec3 + vec2
 						input_rate = "vertex",
 					},
 				},
 				attributes = {
 					{
-						binding = VERTEX_BIND_POSITION,
+						binding = 0,
 						location = 0, -- in_position
 						format = "R32G32_SFLOAT", -- vec2
 						offset = 0,
 					},
 					{
-						binding = VERTEX_BIND_POSITION,
+						binding = 0,
 						location = 1, -- in_color
 						format = "R32G32B32_SFLOAT", -- vec3
 						offset = ffi.sizeof("float") * 2,
 					},
 					{
-						binding = VERTEX_BIND_POSITION,
+						binding = 0,
 						location = 2, -- in_uv
 						format = "R32G32_SFLOAT", -- vec2
 						offset = ffi.sizeof("float") * 5,
@@ -187,7 +307,7 @@ local pipeline = renderer:CreatePipeline(
 					{
 						type = "combined_image_sampler",
 						binding_index = 2,
-						args = {texture_view, texture_sampler},
+						args = {offscreen_target:GetImageView(), texture_sampler},
 					},
 				},
 			},
@@ -252,6 +372,8 @@ local function hsv_to_rgb(h, s, v)
 	return r + m, g + m, b + m
 end
 
+local frame_count = 0
+
 while true do
 	local events = wnd:ReadEvents()
 
@@ -261,21 +383,32 @@ while true do
 			os.exit()
 		end
 
-		if event.type == "window_resize" then renderer:RecreateSwapchain() end
+		if event.type == "window_resize" then window_target:RecreateSwapchain() end
 	end
 
-	if renderer:BeginFrame() then
-		local cmd = renderer:BeginRenderPass(RGBA(0.2, 0.2, 0.2, 1.0))
-		pipeline:UpdateUniformBuffer(1, RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
-		pipeline:Bind(cmd)
-		local extent = renderer:GetExtent()
+	if window_target:BeginFrame() then
+		local cmd = window_target:GetCommandBuffer()
+		cmd:BeginRenderPass(
+			window_target:GetRenderPass(),
+			window_target:GetFramebuffer(),
+			window_target:GetExtent(),
+			RGBA(0.2, 0.2, 0.2, 1.0)
+		)
+		graphics_pipeline:UpdateUniformBuffer(1, RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
+		graphics_pipeline:Bind(cmd)
+		local extent = window_target:GetExtent()
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
 		cmd:SetScissor(0, 0, extent.width, extent.height)
-		pipeline:BindVertexBuffers(cmd, VERTEX_BIND_POSITION)
+		graphics_pipeline:BindVertexBuffers(cmd, 0)
 		cmd:Draw(3, 1, 0, 0)
 		cmd:EndRenderPass()
-		renderer:EndFrame()
+		window_target:EndFrame()
+	end
+
+	if frame_count % 30 == 0 then
+		update_noise_texture()
 	end
 
 	threads.sleep(1)
+	frame_count = frame_count + 1
 end
