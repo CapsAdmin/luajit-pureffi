@@ -254,12 +254,12 @@ local graphics_pipeline = renderer:CreatePipeline(
 function renderer:OnRecreateSwapchain()
 	create_storage_images()
 	-- Update compute pipeline descriptor sets
-	compute_pipeline:UpdateDescriptorSet(1, 0, storage_image_views[1])
-	compute_pipeline:UpdateDescriptorSet(1, 1, storage_image_views[2])
-	compute_pipeline:UpdateDescriptorSet(2, 0, storage_image_views[2])
-	compute_pipeline:UpdateDescriptorSet(2, 1, storage_image_views[1])
+	compute_pipeline:UpdateDescriptorSet("storage_image", 1, 0, storage_image_views[1])
+	compute_pipeline:UpdateDescriptorSet("storage_image", 1, 1, storage_image_views[2])
+	compute_pipeline:UpdateDescriptorSet("storage_image", 2, 0, storage_image_views[2])
+	compute_pipeline:UpdateDescriptorSet("storage_image", 2, 1, storage_image_views[1])
 	-- Update graphics pipeline
-	graphics_pipeline:UpdateDescriptorSet(1, 0, "storage_image", storage_image_views[1])
+	graphics_pipeline:UpdateDescriptorSet("storage_image", 1, 0, storage_image_views[1])
 end
 
 renderer:OnRecreateSwapchain()

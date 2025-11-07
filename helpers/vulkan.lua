@@ -1214,76 +1214,56 @@ do -- instance
 				end
 			end
 
-			function Device:UpdateDescriptorSet(descriptorSet, binding, resource, descriptorType)
-				-- Accept both friendly names and VK_ constants for backwards compatibility
-				local isStorageImage = false
-				local isCombinedImageSampler = false
-
-				if descriptorType and not descriptorType:match("^VK_") then
-					isStorageImage = descriptorType == "storage_image"
-					isCombinedImageSampler = descriptorType == "combined_image_sampler"
-					descriptorType = enums.VK_DESCRIPTOR_TYPE_(descriptorType)
-				else
-					descriptorType = descriptorType or "VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER"
-					isStorageImage = descriptorType == "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
-					isCombinedImageSampler = descriptorType == "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER"
-				end
-
+			function Device:UpdateDescriptorSet(type, descriptorSet, binding, ...)
 				local descriptorWrite = T.Box(
 					vk.VkWriteDescriptorSet,
 					{
 						sType = "VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET",
 						dstSet = descriptorSet.ptr[0],
-						dstBinding = binding or 0,
+						dstBinding = binding,
 						dstArrayElement = 0,
-						descriptorType = descriptorType,
+						descriptorType = enums.VK_DESCRIPTOR_TYPE_(type),
 						descriptorCount = 1,
 					}
 				)
 
-				if isCombinedImageSampler then
-					-- For combined image sampler, resource can be a Texture or separate view/sampler
-					local imageView, sampler
+				local descriptor_info = nil
 
-					if resource.view and resource.sampler then
-						-- Resource is a Texture object
-						imageView = resource.view.ptr[0]
-						sampler = resource.sampler.ptr[0]
-					else
-						-- Resource is {view = ..., sampler = ...}
-						imageView = resource.view
-						sampler = resource.sampler
-					end
-
-					local imageInfo = T.Box(
-						vk.VkDescriptorImageInfo,
+				if type == "uniform_buffer" then
+					local buffer = assert(...)
+					descriptor_info = T.Box(
+						vk.VkDescriptorBufferInfo,
 						{
-							sampler = sampler,
-							imageView = imageView,
-							imageLayout = "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL",
+							buffer = buffer.ptr[0],
+							offset = 0,
+							range = buffer.size,
 						}
 					)
-					descriptorWrite[0].pImageInfo = imageInfo
-				elseif isStorageImage then
-					local imageInfo = T.Box(
+					descriptorWrite[0].pBufferInfo = descriptor_info
+				elseif type == "storage_image" then
+					local imageView = assert(...)
+					descriptor_info = T.Box(
 						vk.VkDescriptorImageInfo,
 						{
 							sampler = nil,
-							imageView = resource.ptr[0],
+							imageView = imageView.ptr[0],
 							imageLayout = "VK_IMAGE_LAYOUT_GENERAL",
 						}
 					)
-					descriptorWrite[0].pImageInfo = imageInfo
-				else
-					local bufferInfo = T.Box(
-						vk.VkDescriptorBufferInfo,
+					descriptorWrite[0].pImageInfo = descriptor_info
+				elseif type == "combined_image_sampler" then
+					local imageView, sampler = assert(select(1, ...)), assert(select(2, ...))
+					descriptor_info = T.Box(
+						vk.VkDescriptorImageInfo,
 						{
-							buffer = resource.ptr[0],
-							offset = 0,
-							range = resource.size,
+							sampler = sampler.ptr[0],
+							imageView = imageView.ptr[0],
+							imageLayout = "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL",
 						}
 					)
-					descriptorWrite[0].pBufferInfo = bufferInfo
+					descriptorWrite[0].pImageInfo = descriptor_info
+				else
+					error("unsupported descriptor type: " .. tostring(type))
 				end
 
 				lib.vkUpdateDescriptorSets(self.ptr[0], 1, descriptorWrite, 0, nil)

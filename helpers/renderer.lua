@@ -372,10 +372,10 @@ do
 		if config.storage_images then
 			for i, img_config in ipairs(config.storage_images) do
 				renderer.device:UpdateDescriptorSet(
+					"storage_image",
 					descriptorSet,
 					binding_index,
-					img_config.image_view,
-					"VK_DESCRIPTOR_TYPE_STORAGE_IMAGE"
+					img_config.image_view
 				)
 				binding_index = binding_index + 1
 			end
@@ -384,7 +384,12 @@ do
 		-- Bind uniform buffers
 		if config.uniform_buffers then
 			for i, ub_config in ipairs(config.uniform_buffers) do
-				renderer.device:UpdateDescriptorSet(descriptorSet, binding_index, ub_config.buffer)
+				renderer.device:UpdateDescriptorSet(
+					"uniform_buffer",
+					descriptorSet,
+					binding_index,
+					ub_config.buffer
+				)
 				binding_index = binding_index + 1
 			end
 		end
@@ -393,10 +398,11 @@ do
 		if config.textures then
 			for i, tex_config in ipairs(config.textures) do
 				renderer.device:UpdateDescriptorSet(
+					"combined_image_sampler",
 					descriptorSet,
 					binding_index,
-					tex_config.texture,
-					"combined_image_sampler"
+					tex_config.texture.view,
+					tex_config.texture.sampler
 				)
 				binding_index = binding_index + 1
 			end
@@ -439,9 +445,9 @@ do
 		self.descriptorPool = descriptorPool
 		return self
 	end
-
-	function Pipeline:UpdateDescriptorSet(index, binding_index, type, obj)
-		self.renderer.device:UpdateDescriptorSet(self.descriptor_sets[index], binding_index, obj, "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE")
+	
+	function Pipeline:UpdateDescriptorSet(type, index, binding_index, ...)
+		self.renderer.device:UpdateDescriptorSet(type, self.descriptor_sets[index], binding_index, ...)
 	end
 
 	function Pipeline:UpdateUniformBuffer(index, data)
@@ -583,8 +589,8 @@ do
 		return self
 	end
 
-	function ComputePipeline:UpdateDescriptorSet(set_index, binding_index, image_view)
-		self.renderer.device:UpdateDescriptorSet(self.descriptor_sets[set_index], binding_index, image_view, "storage_image")
+	function ComputePipeline:UpdateDescriptorSet(type, index, binding_index, ...)
+		self.renderer.device:UpdateDescriptorSet(type, self.descriptor_sets[index], binding_index, ...)
 	end
 
 	function ComputePipeline:Dispatch(cmd)
