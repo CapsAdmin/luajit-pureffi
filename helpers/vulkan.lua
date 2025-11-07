@@ -1133,7 +1133,7 @@ do -- instance
 					local bindingArray = T.Array(vk.VkDescriptorSetLayoutBinding)(#bindings)
 
 					for i, b in ipairs(bindings) do
-						bindingArray[i - 1].binding = b.binding or (i - 1)
+						bindingArray[i - 1].binding = assert(b.binding_index)
 						bindingArray[i - 1].descriptorType = enums.VK_DESCRIPTOR_TYPE_(b.type)
 						bindingArray[i - 1].descriptorCount = b.count or 1
 						bindingArray[i - 1].stageFlags = enums.VK_SHADER_STAGE_(b.stageFlags)
@@ -1214,13 +1214,13 @@ do -- instance
 				end
 			end
 
-			function Device:UpdateDescriptorSet(type, descriptorSet, binding, ...)
+			function Device:UpdateDescriptorSet(type, descriptorSet, binding_index, ...)
 				local descriptorWrite = T.Box(
 					vk.VkWriteDescriptorSet,
 					{
 						sType = "VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET",
 						dstSet = descriptorSet.ptr[0],
-						dstBinding = binding,
+						dstBinding = binding_index,
 						dstArrayElement = 0,
 						descriptorType = enums.VK_DESCRIPTOR_TYPE_(type),
 						descriptorCount = 1,

@@ -110,38 +110,38 @@ local pipeline = renderer:CreatePipeline(
 			},
 		},
 		vertex_buffers = {vertex_buffer},
-		uniform_buffers = {
+		descriptor_sets = {
 			{
+				type = "uniform_buffer",
 				stage = "fragment",
-				buffer = renderer:CreateBuffer(
+				binding_index = 0,
+				args = {renderer:CreateBuffer(
 					{
 						byte_size = ffi.sizeof(RGBA),
 						buffer_usage = "uniform_buffer",
 						data = RGBA(1.0, 1.0, 1.0, 1.0),
 					}
-				),
+				)}
 			},
 			{
+				type = "uniform_buffer",
 				stage = "fragment",
-				buffer = renderer:CreateBuffer(
+				binding_index = 1,
+				args = {renderer:CreateBuffer(
 					{
 						byte_size = ffi.sizeof(RGBA),
 						buffer_usage = "uniform_buffer",
 						data = RGBA(1.0, 1.0, 1.0, 1.0),
 					}
-				),
+				)}
 			},
-		},
-		textures = {
 			{
+				type = "combined_image_sampler",
 				stage = "fragment",
-				texture = {
-					image = texture_image,
-					view = texture_view,
-					sampler = texture_sampler,
-				},
-			},
-		},
+				binding_index = 2,
+				args = {texture_view, texture_sampler},
+			}
+		},	
 		shader_stages = {
 			{
 				type = "vertex",

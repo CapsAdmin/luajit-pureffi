@@ -146,7 +146,6 @@ void main() {
 	outColor = vec4(color, 1.0);
 }
 ]]
-
 -- Storage images for ping-pong compute (Game of Life needs 2 images to read from one and write to the other)
 local storage_images = {}
 local storage_image_views = {}
@@ -154,10 +153,10 @@ local storage_image_views = {}
 local function create_storage_images()
 	local extent = renderer:GetExtent()
 	local pixel_count = extent.width * extent.height
-	
 	-- Generate random initial state
 	local data = ffi.new("uint8_t[?]", pixel_count * 4)
 	math.randomseed(os.time())
+
 	for i = 0, pixel_count - 1 do
 		local alive = math.random() < 0.3
 		local value = alive and 255 or 0
@@ -166,10 +165,11 @@ local function create_storage_images()
 		data[i * 4 + 2] = value
 		data[i * 4 + 3] = 255
 	end
-	
+
 	-- Create 2 storage images for ping-pong
 	storage_images = {}
 	storage_image_views = {}
+
 	for i = 1, 2 do
 		local image = renderer.device:CreateImage(
 			extent.width,
@@ -184,41 +184,47 @@ local function create_storage_images()
 	end
 end
 
-
 local compute_pipeline = renderer:CreateComputePipeline(
 	{
 		shader = COMPUTE_SHADER,
 		workgroup_size = WORKGROUP_SIZE,
 		descriptor_set_count = 2, -- 2 sets for ping-pong
 		descriptor_layout = {
-			{binding = 0, type = "storage_image", stageFlags = "compute", count = 1}, -- input
-			{binding = 1, type = "storage_image", stageFlags = "compute", count = 1}, -- output
+			{binding_index = 0, type = "storage_image", stageFlags = "compute", count = 1}, -- input
+			{binding_index = 1, type = "storage_image", stageFlags = "compute", count = 1}, -- output
 		},
 		descriptor_pool = {
 			{type = "storage_image", count = 4}, -- 2 bindings * 2 sets
 		},
 	}
 )
-
 create_storage_images()
-
 local graphics_pipeline = renderer:CreatePipeline(
 	{
 		dynamic_states = {"viewport", "scissor"},
 		input_assembly = {topology = "triangle_list", primitive_restart = false},
-		storage_images = {
-			{stage = "fragment", image_view = storage_image_views[1]},
-		},
-		uniform_buffers = {
+		descriptor_sets = {
 			{
+				type = "storage_image",
 				stage = "fragment",
-				buffer = renderer:CreateBuffer(
-					{
-						byte_size = ffi.sizeof(UniformData),
-						buffer_usage = "uniform_buffer",
-						data = UniformData({0.0, 0.0, 0.0, 1.0}),
-					}
-				),
+				binding_index = 0,
+				args = {
+					storage_image_views[1],
+				},
+			},
+			{
+				type = "uniform_buffer",
+				stage = "fragment",
+				binding_index = 1,
+				args = {
+					renderer:CreateBuffer(
+						{
+							byte_size = ffi.sizeof(UniformData),
+							buffer_usage = "uniform_buffer",
+							data = UniformData({0.0, 0.0, 0.0, 1.0}),
+						}
+					),
+				},
 			},
 		},
 		shader_stages = {
@@ -263,9 +269,7 @@ function renderer:OnRecreateSwapchain()
 end
 
 renderer:OnRecreateSwapchain()
-
 wnd:Initialize()
-
 wnd:OpenWindow()
 -- Simulation state
 local paused = false
@@ -281,14 +285,18 @@ while true do
 	local events = wnd:ReadEvents()
 
 	for _, event in ipairs(events) do
-		if event.type == "window_close" or (event.type == "key_press" and event.key == "escape") then
+		if
+			event.type == "window_close" or
+			(
+				event.type == "key_press" and
+				event.key == "escape"
+			)
+		then
 			renderer:WaitForIdle()
 			os.exit()
 		end
 
-		if event.type == "window_resize" then 
-			renderer:RecreateSwapchain() 
-		end
+		if event.type == "window_resize" then renderer:RecreateSwapchain() end
 
 		-- Handle keyboard input
 		if event.type == "key_press" then
@@ -307,9 +315,8 @@ while true do
 		local cmd = renderer:GetCommandBuffer()
 
 		-- Run compute shader (only if not paused)
-		if not paused then 
+		if not paused then
 			compute_pipeline:Dispatch(cmd)
-			
 			-- Barrier: compute write -> fragment read
 			local output_image_idx = (compute_pipeline.current_image_index % 2) + 1
 			cmd:PipelineBarrier(
@@ -327,7 +334,6 @@ while true do
 					},
 				}
 			)
-			
 			-- Swap descriptor sets for next frame
 			compute_pipeline:SwapImages()
 		end

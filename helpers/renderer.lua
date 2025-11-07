@@ -314,97 +314,38 @@ do
 		renderer:CreateFramebuffers()
 		local layout = {}
 		local pool_sizes = {}
-		local binding_index = 0
 
-		-- Add storage images to layout
-		if config.storage_images then
-			for i, img_config in ipairs(config.storage_images) do
-				layout[binding_index + 1] = {
-					binding = binding_index,
-					type = "storage_image",
-					stageFlags = img_config.stage,
+		if config.descriptor_sets then
+			local counts = {}
+
+			for i, ds in ipairs(config.descriptor_sets) do
+				layout[i] = {
+					binding_index = ds.binding_index,
+					type = ds.type,
+					stageFlags = ds.stage,
 					count = 1,
 				}
-				binding_index = binding_index + 1
+				counts[ds.type] = (counts[ds.type] or 0) + 1
+
+				if ds.type == "uniform_buffer" then
+					uniform_buffers[ds.binding_index] = ds.args[1]
+				end
 			end
 
-			table.insert(pool_sizes, {type = "storage_image", count = #config.storage_images})
-		end
-
-		-- Add uniform buffers to layout
-		if config.uniform_buffers then
-			for i, ub_config in ipairs(config.uniform_buffers) do
-				layout[binding_index + 1] = {
-					binding = binding_index,
-					type = "uniform_buffer",
-					stageFlags = ub_config.stage,
-					count = 1,
-				}
-				binding_index = binding_index + 1
+			for type, count in pairs(counts) do
+				table.insert(pool_sizes, {type = type, count = count})
 			end
-
-			table.insert(pool_sizes, {type = "uniform_buffer", count = #config.uniform_buffers})
-		end
-
-		-- Add textures to layout
-		if config.textures then
-			for i, tex_config in ipairs(config.textures) do
-				layout[binding_index + 1] = {
-					binding = binding_index,
-					type = "combined_image_sampler",
-					stageFlags = tex_config.stage,
-					count = 1,
-				}
-				binding_index = binding_index + 1
-			end
-
-			table.insert(pool_sizes, {type = "combined_image_sampler", count = #config.textures})
 		end
 
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
 		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
 		local descriptorPool = renderer.device:CreateDescriptorPool(pool_sizes, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
+
 		-- Update descriptor sets
-		binding_index = 0
-
-		-- Bind storage images
-		if config.storage_images then
-			for i, img_config in ipairs(config.storage_images) do
-				renderer.device:UpdateDescriptorSet(
-					"storage_image",
-					descriptorSet,
-					binding_index,
-					img_config.image_view
-				)
-				binding_index = binding_index + 1
-			end
-		end
-
-		-- Bind uniform buffers
-		if config.uniform_buffers then
-			for i, ub_config in ipairs(config.uniform_buffers) do
-				renderer.device:UpdateDescriptorSet(
-					"uniform_buffer",
-					descriptorSet,
-					binding_index,
-					ub_config.buffer
-				)
-				binding_index = binding_index + 1
-			end
-		end
-
-		-- Bind textures
-		if config.textures then
-			for i, tex_config in ipairs(config.textures) do
-				renderer.device:UpdateDescriptorSet(
-					"combined_image_sampler",
-					descriptorSet,
-					binding_index,
-					tex_config.texture.view,
-					tex_config.texture.sampler
-				)
-				binding_index = binding_index + 1
+		if config.descriptor_sets then
+			for i, ds in ipairs(config.descriptor_sets) do
+				renderer.device:UpdateDescriptorSet(ds.type, descriptorSet, ds.binding_index, unpack(ds.args))
 			end
 		end
 
@@ -440,12 +381,12 @@ do
 		self.pipeline_layout = pipelineLayout
 		self.renderer = renderer
 		self.config = config
-		self.uniform_buffers = config.uniform_buffers
+		self.uniform_buffers = uniform_buffers
 		self.descriptorSetLayout = descriptorSetLayout
 		self.descriptorPool = descriptorPool
 		return self
 	end
-	
+
 	function Pipeline:UpdateDescriptorSet(type, index, binding_index, ...)
 		self.renderer.device:UpdateDescriptorSet(type, self.descriptor_sets[index], binding_index, ...)
 	end
@@ -454,8 +395,7 @@ do
 		if index < 1 or index > #self.uniform_buffers then
 			error("Invalid uniform buffer index: " .. index)
 		end
-
-		local ub = self.uniform_buffers[index].buffer
+		local ub = self.uniform_buffers[index]
 		ub:CopyData(data, ub.byte_size)
 	end
 
