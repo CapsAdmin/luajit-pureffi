@@ -40,6 +40,9 @@ local function hsv_to_rgb(h, s, v)
 	return r + m, g + m, b + m
 end
 
+local window_target = renderer:CreateWindowRenderTarget()
+
+
 while true do
 	local events = wnd:ReadEvents()
 
@@ -54,12 +57,12 @@ while true do
 		end
 	end
 
-	if renderer:BeginFrame() then
-		renderer:GetCommandBuffer():ClearColorImage({
-			image = renderer:GetSwapChainImage(),
+	if window_target:BeginFrame() then
+		window_target:GetCommandBuffer():ClearColorImage({
+			image = window_target:GetSwapChainImage(),
 			color = {hsv_to_rgb(frame % 1, 1, 1)},
 		})
-		renderer:EndFrame()
+		window_target:EndFrame()
 	end
 
 	frame = frame + 0.01

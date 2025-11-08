@@ -509,6 +509,10 @@ do
 		return self
 	end
 
+	function WindowRenderTarget:GetSwapChainImage()
+		return self.renderer.swapchain_images[self.image_index]
+	end
+
 	function WindowRenderTarget:GetRenderPass()
 		return self.render_pass
 	end
