@@ -67,6 +67,7 @@ local enums = translate_enums(
 		{vk.VkFilter, "VK_FILTER_"},
 		{vk.VkSamplerMipmapMode, "VK_SAMPLER_MIPMAP_MODE_"},
 		{vk.VkSamplerAddressMode, "VK_SAMPLER_ADDRESS_MODE_"},
+		{vk.VkIndexType, "VK_INDEX_TYPE_"},
 	}
 )
 -- Export enums for use in applications
@@ -835,6 +836,10 @@ do -- instance
 						)
 					end
 
+					function CommandBuffer:BindVertexBuffer(buffer, binding, offset)
+						self:BindVertexBuffers(binding, {buffer}, offset and {offset} or nil)
+					end
+
 					function CommandBuffer:BindDescriptorSets(type, pipelineLayout, descriptorSets, firstSet)
 						-- descriptorSets is an array of descriptor set objects
 						local setCount = #descriptorSets
@@ -862,6 +867,27 @@ do -- instance
 							vertexCount or 3,
 							instanceCount or 1,
 							firstVertex or 0,
+							firstInstance or 0
+						)
+					end
+
+					function CommandBuffer:BindIndexBuffer(buffer, offset, indexType)
+						indexType = indexType or "uint32"
+						lib.vkCmdBindIndexBuffer(
+							self.ptr[0],
+							buffer.ptr[0],
+							offset,
+							enums.VK_INDEX_TYPE_(indexType)
+						)
+					end
+
+					function CommandBuffer:DrawIndexed(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance)
+						lib.vkCmdDrawIndexed(
+							self.ptr[0],
+							indexCount,
+							instanceCount or 1,
+							firstIndex or 0,
+							vertexOffset or 0,
 							firstInstance or 0
 						)
 					end

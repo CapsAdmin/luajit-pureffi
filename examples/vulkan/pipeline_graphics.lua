@@ -133,7 +133,7 @@ local noise_pipeline = renderer:CreatePipeline(
 local function update_noise_texture()
 	offscreen_target:BeginFrame()
 	local cmd = offscreen_target:GetCommandBuffer()
-				noise_pipeline:UpdateUniformBuffer(0, ffi.new("float[1]", math.random() * 1000.0))
+	noise_pipeline:GetUniformBuffer(0):CopyData(ffi.new("float[1]", math.random() * 1000.0))
 
 	cmd:BeginRenderPass(
 		offscreen_target:GetRenderPass(),
@@ -166,30 +166,48 @@ local vertex_buffer = renderer:CreateBuffer(
 		buffer_usage = "vertex_buffer",
 		data_type = "float",
 		data = {
-			-- bottom-left (red) + UV (0, 0)
-			0.0, -- x
+			-- top-left (red) + UV (0, 0)
+			-0.5, -- x
 			-0.5, -- y
 			1.0, -- r
 			0.0, -- g
 			0.0, -- b
 			0.0, -- u
 			0.0, -- v
-			-- top (blue) + UV (0.5, 1)
+			-- top-right (green) + UV (1, 0)
 			0.5,
-			0.5,
+			-0.5,
 			0.0,
 			1.0,
 			0.0,
-			0.5,
 			1.0,
-			-- bottom-right (green) + UV (1, 0)
+			0.0,
+			-- bottom-right (blue) + UV (1, 1)
+			0.5,
+			0.5,
+			0.0,
+			0.0,
+			1.0,
+			1.0,
+			1.0,
+			-- bottom-left (yellow) + UV (0, 1)
 			-0.5,
 			0.5,
-			0.0,
-			0.0,
 			1.0,
 			1.0,
 			0.0,
+			0.0,
+			1.0,
+		},
+	}
+)
+local index_buffer = renderer:CreateBuffer(
+	{
+		buffer_usage = "index_buffer",
+		data_type = "uint32_t",
+		data = {
+			0, 1, 2, -- first triangle (top-left, top-right, bottom-right)
+			2, 3, 0, -- second triangle (bottom-right, bottom-left, top-left)
 		},
 	}
 )
@@ -248,7 +266,6 @@ local graphics_pipeline = renderer:CreatePipeline(
 					topology = "triangle_list",
 					primitive_restart = false,
 				},
-				buffers = {vertex_buffer},
 			},
 			{
 				type = "fragment",
@@ -394,13 +411,14 @@ while true do
 			window_target:GetExtent(),
 			RGBA(0.2, 0.2, 0.2, 1.0)
 		)
-		graphics_pipeline:UpdateUniformBuffer(1, RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
+		graphics_pipeline:GetUniformBuffer(1):CopyData(RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
 		graphics_pipeline:Bind(cmd)
 		local extent = window_target:GetExtent()
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
 		cmd:SetScissor(0, 0, extent.width, extent.height)
-		graphics_pipeline:BindVertexBuffers(cmd, 0)
-		cmd:Draw(3, 1, 0, 0)
+		cmd:BindVertexBuffer(vertex_buffer, 0)
+		cmd:BindIndexBuffer(index_buffer, 0)
+		cmd:DrawIndexed(6, 1, 0, 0, 0)
 		cmd:EndRenderPass()
 		window_target:EndFrame()
 	end

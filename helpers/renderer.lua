@@ -292,7 +292,6 @@ do
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
 		local vertex_bindings
 		local vertex_attributes
-		local vertex_buffers
 
 		-- Update descriptor sets
 		for i, stage in ipairs(config.shader_stages) do
@@ -305,7 +304,6 @@ do
 			if stage.type == "vertex" then
 				vertex_bindings = stage.bindings
 				vertex_attributes = stage.attributes
-				vertex_buffers = stage.buffers
 			end
 		end
 
@@ -327,7 +325,6 @@ do
 			pipelineLayout
 		)
 		self.pipeline = pipeline
-		self.vertex_buffers = vertex_buffers
 		self.descriptor_sets = {descriptorSet}
 		self.pipeline_layout = pipelineLayout
 		self.renderer = renderer
@@ -342,31 +339,18 @@ do
 		self.renderer.device:UpdateDescriptorSet(type, self.descriptor_sets[index], binding_index, ...)
 	end
 
-	function Pipeline:UpdateUniformBuffer(binding_index, data)
+	function Pipeline:GetUniformBuffer(binding_index)
 		local ub = self.uniform_buffers[binding_index]
 
 		if not ub then
 			error("Invalid uniform buffer binding index: " .. binding_index)
 		end
 
-		ub:CopyData(data, ub.size)
-	end
-
-	function Pipeline:UpdateVertexBuffer(index, data)
-		if index < 1 or index > #self.vertex_buffers then
-			error("Invalid vertex buffer index: " .. index)
-		end
-
-		local vb = self.vertex_buffers[index]
-		vb:CopyData(data, vb.byte_size)
+		return ub
 	end
 
 	function Renderer:CreatePipeline(...)
 		return Pipeline.New(self, ...)
-	end
-
-	function Pipeline:BindVertexBuffers(cmd, index)
-		cmd:BindVertexBuffers(0, self.vertex_buffers)
 	end
 
 	function Pipeline:Bind(cmd)

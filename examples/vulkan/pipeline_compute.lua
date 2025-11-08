@@ -347,7 +347,7 @@ while true do
 
 		-- Update uniform buffer
 		time = time + 0.016
-		graphics_pipeline:UpdateUniformBuffer(1, UniformData({
+		graphics_pipeline:GetUniformBuffer(1):CopyData(UniformData({
 			time,
 			(
 				time * 0.1
