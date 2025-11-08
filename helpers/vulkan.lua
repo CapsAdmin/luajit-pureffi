@@ -68,6 +68,8 @@ local enums = translate_enums(
 		{vk.VkSamplerMipmapMode, "VK_SAMPLER_MIPMAP_MODE_"},
 		{vk.VkSamplerAddressMode, "VK_SAMPLER_ADDRESS_MODE_"},
 		{vk.VkIndexType, "VK_INDEX_TYPE_"},
+		{vk.VkBlendFactor, "VK_BLEND_FACTOR_"},
+		{vk.VkBlendOp, "VK_BLEND_OP_"},
 	}
 )
 -- Export enums for use in applications
@@ -918,6 +920,10 @@ do -- instance
 						lib.vkCmdSetScissor(self.ptr[0], 0, 1, scissor)
 					end
 
+					function CommandBuffer:PushConstants(layout, stage, binding, data_size, data)
+						lib.vkCmdPushConstants(self.ptr[0], layout.ptr[0], enums.VK_SHADER_STAGE_(stage), binding, data_size, data)
+					end
+
 					function CommandBuffer:ClearColorImage(config)
 						local range = T.Box(
 							vk.VkImageSubresourceRange,
@@ -1694,8 +1700,9 @@ do -- instance
 				PipelineLayout.__index = PipelineLayout
 
 				-- used to pass data to shaders
-				function Device:CreatePipelineLayout(descriptorSetLayouts)
+				function Device:CreatePipelineLayout(descriptorSetLayouts, pushConstantRanges)
 					-- descriptorSetLayouts is an optional array of DescriptorSetLayout objects
+					-- pushConstantRanges is an optional array of {stage, offset, size}
 					local setLayoutArray = nil
 					local setLayoutCount = 0
 
@@ -1708,14 +1715,30 @@ do -- instance
 						end
 					end
 
+					local pushConstantArray = nil
+					local pushConstantCount = 0
+
+					if pushConstantRanges and #pushConstantRanges > 0 then
+						pushConstantCount = #pushConstantRanges
+						pushConstantArray = T.Array(vk.VkPushConstantRange)(pushConstantCount)
+
+						for i, range in ipairs(pushConstantRanges) do
+							pushConstantArray[i - 1] = {
+								stageFlags = enums.VK_SHADER_STAGE_(range.stage),
+								offset = range.offset,
+								size = range.size,
+							}
+						end
+					end
+
 					local pipelineLayoutInfo = T.Box(
 						vk.VkPipelineLayoutCreateInfo,
 						{
 							sType = "VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO",
 							setLayoutCount = setLayoutCount,
 							pSetLayouts = setLayoutArray,
-							pushConstantRangeCount = 0,
-							pPushConstantRanges = nil,
+							pushConstantRangeCount = pushConstantCount,
+							pPushConstantRanges = pushConstantArray,
 						}
 					)
 					local ptr = T.Box(vk.VkPipelineLayout)()
@@ -1901,6 +1924,12 @@ do -- instance
 							{
 								colorWriteMask = enums.VK_COLOR_COMPONENT_(color_blend_attachment.color_write_mask or {"R", "G", "B", "A"}),
 								blendEnable = color_blend_attachment.blend or 0,
+								srcColorBlendFactor = color_blend_attachment.src_color_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.src_color_blend_factor) or enums.VK_BLEND_FACTOR_("one"),
+								dstColorBlendFactor = color_blend_attachment.dst_color_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.dst_color_blend_factor) or enums.VK_BLEND_FACTOR_("zero"),
+								colorBlendOp = color_blend_attachment.color_blend_op and enums.VK_BLEND_OP_(color_blend_attachment.color_blend_op) or enums.VK_BLEND_OP_("add"),
+								srcAlphaBlendFactor = color_blend_attachment.src_alpha_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.src_alpha_blend_factor) or enums.VK_BLEND_FACTOR_("one"),
+								dstAlphaBlendFactor = color_blend_attachment.dst_alpha_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.dst_alpha_blend_factor) or enums.VK_BLEND_FACTOR_("zero"),
+								alphaBlendOp = color_blend_attachment.alpha_blend_op and enums.VK_BLEND_OP_(color_blend_attachment.alpha_blend_op) or enums.VK_BLEND_OP_("add"),
 							}
 						)
 					end

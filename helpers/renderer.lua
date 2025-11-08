@@ -256,6 +256,7 @@ do
 		local shader_modules = {}
 		local layout = {}
 		local pool_sizes = {}
+		local push_constant_ranges = {}
 
 		for i, stage in ipairs(config.shader_stages) do
 			shader_modules[i] = {
@@ -284,10 +285,18 @@ do
 					table.insert(pool_sizes, {type = type, count = count})
 				end
 			end
+
+			if stage.push_constants then
+				table.insert(push_constant_ranges, {
+					stage = stage.type,
+					offset = stage.push_constants.offset or 0,
+					size = stage.push_constants.size,
+				})
+			end
 		end
 
 		local descriptorSetLayout = renderer.device:CreateDescriptorSetLayout(layout)
-		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout})
+		local pipelineLayout = renderer.device:CreatePipelineLayout({descriptorSetLayout}, push_constant_ranges)
 		local descriptorPool = renderer.device:CreateDescriptorPool(pool_sizes, 1)
 		local descriptorSet = descriptorPool:AllocateDescriptorSet(descriptorSetLayout)
 		local vertex_bindings
@@ -337,6 +346,10 @@ do
 
 	function Pipeline:UpdateDescriptorSet(type, index, binding_index, ...)
 		self.renderer.device:UpdateDescriptorSet(type, self.descriptor_sets[index], binding_index, ...)
+	end
+
+	function Pipeline:PushConstants(cmd, stage, binding_index, data, data_size)
+		cmd:PushConstants(self.pipeline_layout, stage, binding_index, data_size or ffi.sizeof(data), data)
 	end
 
 	function Pipeline:GetUniformBuffer(binding_index)

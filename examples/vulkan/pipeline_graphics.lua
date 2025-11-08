@@ -5,6 +5,12 @@ local Renderer = require("helpers.renderer")
 local shaderc = require("shaderc")
 local wnd = cocoa.window()
 local RGBA = ffi.typeof("float[4]")
+local PushConstants = ffi.typeof([[
+	struct {
+		float color[4];
+		float alpha;
+	}
+]])
 
 local renderer = Renderer.New(
 	{
@@ -276,11 +282,12 @@ local graphics_pipeline = renderer:CreatePipeline(
 						vec4 color_multiplier;
 					} ubo1;
 
-					layout(binding = 1) uniform ColorUniform2 {
+					layout(push_constant) uniform PushConstants {
 						vec4 color_multiplier;
-					} ubo2;
+						float alpha;
+					} pc;
 
-					layout(binding = 2) uniform sampler2D tex_sampler;
+					layout(binding = 1) uniform sampler2D tex_sampler;
 
 					// from vertex shader
 					layout(location = 0) in vec3 frag_color;
@@ -291,7 +298,8 @@ local graphics_pipeline = renderer:CreatePipeline(
 
 					void main() {
 						vec4 tex_color = texture(tex_sampler, frag_uv);
-						out_color = vec4(frag_color, 1.0) * ubo1.color_multiplier * ubo2.color_multiplier * tex_color;
+						out_color = vec4(frag_color, 1.0) * pc.color_multiplier * ubo1.color_multiplier * tex_color;
+						out_color.a *= pc.alpha;
 					}
 				]],
 				descriptor_sets = {
@@ -308,24 +316,16 @@ local graphics_pipeline = renderer:CreatePipeline(
 							),
 						},
 					},
-					{
-						type = "uniform_buffer",
-						binding_index = 1,
-						args = {
-							renderer:CreateBuffer(
-								{
-									byte_size = ffi.sizeof(RGBA),
-									buffer_usage = "uniform_buffer",
-									data = RGBA(1.0, 1.0, 1.0, 1.0),
-								}
-							),
-						},
-					},
+
 					{
 						type = "combined_image_sampler",
-						binding_index = 2,
+						binding_index = 1,
 						args = {offscreen_target:GetImageView(), texture_sampler},
 					},
+				},
+				push_constants = {
+					size = ffi.sizeof(PushConstants),
+					offset = 0,
 				},
 			},
 		},
@@ -344,7 +344,13 @@ local graphics_pipeline = renderer:CreatePipeline(
 			constants = {0.0, 0.0, 0.0, 0.0},
 			attachments = {
 				{
-					blend = false,
+					blend = true,
+					src_color_blend_factor = "src_alpha",
+					dst_color_blend_factor = "one_minus_src_alpha",
+					color_blend_op = "add",
+					src_alpha_blend_factor = "one",
+					dst_alpha_blend_factor = "zero",
+					alpha_blend_op = "add",
 					color_write_mask = {"r", "g", "b", "a"},
 				},
 			},
@@ -392,6 +398,7 @@ end
 local frame_count = 0
 
 while true do
+	
 	local events = wnd:ReadEvents()
 
 	for _, event in ipairs(events) do
@@ -411,9 +418,15 @@ while true do
 			window_target:GetExtent(),
 			RGBA(0.2, 0.2, 0.2, 1.0)
 		)
-		graphics_pipeline:GetUniformBuffer(1):CopyData(RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
 		graphics_pipeline:Bind(cmd)
 		local extent = window_target:GetExtent()
+
+		--graphics_pipeline:GetUniformBuffer(1):CopyData(RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
+		local pc_data = PushConstants()
+		local r, g, b = hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)
+		pc_data.color[0], pc_data.color[1], pc_data.color[2], pc_data.color[3] = r, g, b, 1.0
+		pc_data.alpha = math.abs(math.sin(os.clock() * 0.5))
+		graphics_pipeline:PushConstants(cmd, "fragment", 0, pc_data)
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
 		cmd:SetScissor(0, 0, extent.width, extent.height)
 		cmd:BindVertexBuffer(vertex_buffer, 0)
