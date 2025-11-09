@@ -1,7 +1,6 @@
 local structs = {}
 local string_split = require("helpers.string_split")
 local ffi = require("ffi")
-
 local istype = ffi.istype
 local typeof = ffi.typeof
 local tostring = tostring
@@ -116,7 +115,6 @@ function structs.AddOperator(META, operator, ...)
 		lua = lua:gsub("CLASSNAME", META.ClassName)
 		lua = lua:gsub("LINE", str)
 		lua = parse_args(META, lua, ", ")
-		print(lua)
 		assert(loadstring(lua, META.ClassName .. " operator " .. operator))(META, structs)
 	elseif operator == "unpack" then
 		local lua = [==[
