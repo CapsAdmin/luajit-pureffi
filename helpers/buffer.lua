@@ -3,17 +3,19 @@ META.__index = META
 local ffi = require("ffi")
 local ffi_string = ffi.string
 META.CType = ffi.typeof([[
-	struct { 
-		uint8_t * Buffer; 
-		uint32_t ByteSize; 
+	struct {
+		uint8_t * Buffer;
+		uint32_t ByteSize;
 		uint32_t Position;
 		bool Writable;
 		bool PushPopStack[32];
 		uint32_t PushPopStackPos;
-		uint8_t buf_byte;
+		uint32_t buf_byte;
 		uint8_t buf_nbit;
+		uint32_t buf_start_pos;
 	}
 ]])
+local refs = setmetatable({}, {__mode = "k"})
 
 function META:MakeWritable()
 	self.Writable = true
@@ -30,12 +32,13 @@ do
 
 		if self.Writable then
 			while self:TheEnd() do
-				-- expand buffer
 				local new_size = math.max(self.ByteSize * 2, pos)
 				local new_buffer = ffi.new("uint8_t[?]", new_size)
 				ffi.copy(new_buffer, self.Buffer, self.ByteSize)
 				self.Buffer = new_buffer
 				self.ByteSize = new_size
+				-- Update refs to prevent GC of new buffer
+				refs[self] = {new_buffer}
 			end
 		end
 	end
@@ -64,13 +67,28 @@ end
 
 do
 	function META:WriteByte(b)
-		self.Buffer[self:GetPosition()] = b
+		local pos = self:GetPosition()
+
+		-- Ensure buffer has space before writing
+		if self.Writable and pos >= self.ByteSize then
+			-- Expand buffer before writing
+			local new_size = math.max(self.ByteSize * 2, pos + 1)
+			local new_buffer = ffi.new("uint8_t[?]", new_size)
+			ffi.copy(new_buffer, self.Buffer, self.ByteSize)
+			self.Buffer = new_buffer
+			self.ByteSize = new_size
+			-- Update refs to prevent GC of new buffer
+			refs[self] = {new_buffer}
+		end
+
+		self.Buffer[pos] = b
 		self:Advance(1)
 		return self
 	end
 
 	function META:ReadByte()
-		local byte = self.Buffer[self:GetPosition()]
+		local pos = self:GetPosition()
+		local byte = self.Buffer[pos]
 		self:Advance(1)
 		return byte
 	end
@@ -713,6 +731,11 @@ do -- read bits
 	function META:RestartReadBits()
 		self.buf_byte = 0
 		self.buf_nbit = 0
+
+		-- Reset to the position where bit reading started
+		if self.buf_start_pos > 0 or self:GetPosition() > 0 then
+			self:SetPosition(self.buf_start_pos)
+		end
 	end
 
 	function META:BitsLeftInByte()
@@ -722,11 +745,24 @@ do -- read bits
 	function META:ReadBits(nbits)
 		if nbits == 0 then return 0 end
 
-		for i = 0, nbits, 8 do
-			if self.buf_nbit >= nbits then break end
+		-- If starting fresh bit reading, save position
+		if self.buf_nbit == 0 then self.buf_start_pos = self:GetPosition() end
 
-			self.buf_byte = self.buf_byte + bit.lshift(self:ReadByte(), self.buf_nbit)
+		-- Accumulate bytes until we have enough bits
+		-- Limit to 32 bits to prevent overflow of uint32_t buf_byte
+		while self.buf_nbit < nbits and self.buf_nbit < 32 do
+			if self:TheEnd() then
+				-- No more bytes available
+				if self.buf_nbit >= nbits then break else return nil end
+			end
+
+			-- Use bit.bor instead of addition to avoid signed/unsigned issues
+			self.buf_byte = bit.bor(self.buf_byte, bit.lshift(self:ReadByte(), self.buf_nbit))
 			self.buf_nbit = self.buf_nbit + 8
+		end
+
+		-- Check if we have enough bits before proceeding
+		if self.buf_nbit < nbits then return nil -- Not enough bits available
 		end
 
 		self.buf_nbit = self.buf_nbit - nbits
@@ -743,8 +779,6 @@ do -- read bits
 		return bits
 	end
 end
-
-local refs = setmetatable({}, {_mode = "kv"})
 
 function META.New(data, len)
 	local self = META.CType({
