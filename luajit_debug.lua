@@ -36,6 +36,7 @@ ffi.cdef([[
 ]])
 local LUA_GLOBALSINDEX = -10002
 local state = ffi.C.luaL_newstate()
+io.stdout:setvbuf("no")
 
 for _, what in ipairs({"SIGSEGV"}) do
 	local enum = signals[what]
