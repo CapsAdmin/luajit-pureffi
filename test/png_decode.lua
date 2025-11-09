@@ -1,8 +1,17 @@
+print("Starting PNG decode test...")
+io.flush()
 local ffi = require("ffi")
+print("Loaded FFI")
+io.flush()
 local Buffer = require("helpers.buffer")
+print("Loaded Buffer")
+io.flush()
 local png = require("helpers.png")
+print("Loaded PNG")
+io.flush()
 -- Load PNG file into buffer
 local file = io.open("examples/vulkan/capsadmin.png", "rb")
+print("Opened file")
 
 if not file then error("Could not open PNG file") end
 
@@ -14,7 +23,7 @@ ffi.copy(file_buffer_data, file_data, #file_data)
 local file_buffer = Buffer.New(file_buffer_data, #file_data)
 -- Decode PNG
 print("Decoding PNG...")
-local img = png.decode(file_buffer)
+local img = png.decode(file_buffer, nil, true) -- verbose = true
 -- Print results
 print("Width:", img.width)
 print("Height:", img.height)

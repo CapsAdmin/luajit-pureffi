@@ -280,7 +280,6 @@ local function pngImage(inputBuffer, progCallback, verbose)
 	local height = 0
 	local depth = 0
 	local colorType = 0
-	local output = {}
 
 	local function printV(msg)
 		if (verbose) then print(msg) end
@@ -290,32 +289,33 @@ local function pngImage(inputBuffer, progCallback, verbose)
 		error("Not a png")
 	end
 
-	printV("Parsing Chunks...")
-	chunkData = extractChunkData(inputBuffer)
+	local ok, chunks = pcall(extractChunkData, inputBuffer)
+
+	if not ok then
+		print("Chunk extraction failed: " .. tostring(chunks))
+		error(chunks)
+	end
+
+	chunkData = chunks
 	width = chunkData.IHDR.width
 	height = chunkData.IHDR.height
 	depth = chunkData.IHDR.bitDepth
 	colorType = chunkData.IHDR.colorType
-	printV("Deflating...")
-	deflate.inflate_zlib(
-		{
+	local success, result = pcall(function()
+		return deflate.inflate_zlib({
 			input = chunkData.IDAT.data,
-			output = function(byte)
-				output[#output + 1] = string.char(byte)
-			end,
 			disable_crc = true,
-		}
-	)
+		})
+	end)
 
-	-- Convert decompressed data to buffer
-	local decompressedStr = table.concat(output)
-	local decompressedSize = #decompressedStr
-	local decompressedData = ffi.new("uint8_t[?]", decompressedSize)
-	ffi.copy(decompressedData, decompressedStr, decompressedSize)
-	local pixelDataBuffer = Buffer.New(decompressedData, decompressedSize)
+	if not success then
+		printV("Decompression failed: " .. tostring(result))
+		error(result)
+	end
 
+	local pixelDataBuffer = result
+	printV("Decompressed buffer size: " .. pixelDataBuffer:GetSize())
 	printV("Creating pixelmap...")
-
 	-- Create output buffer for RGBA pixels (4 bytes per pixel)
 	local outputSize = width * height * 4
 	local outputData = ffi.new("uint8_t[?]", outputSize)
@@ -339,7 +339,6 @@ local function pngImage(inputBuffer, progCallback, verbose)
 	end
 
 	printV("Done.")
-
 	return {
 		width = width,
 		height = height,
