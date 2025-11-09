@@ -782,7 +782,7 @@ end
 
 function META.New(data, len)
 	local self = META.CType({
-		Buffer = data,
+		Buffer = ffi.cast("uint8_t *", data),
 		ByteSize = len or #data,
 	})
 	refs[self] = {data}

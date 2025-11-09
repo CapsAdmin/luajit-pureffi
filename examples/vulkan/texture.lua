@@ -7,39 +7,6 @@ local wnd = cocoa.window()
 local Color = require("helpers.structs.color")
 local png = require("helpers.png")
 local Buffer = require("helpers.buffer")
-
--- Load PNG file into buffer
-local file = io.open("examples/vulkan/capsadmin.png", "rb")
-local file_data = file:read("*a")
-file:close()
-local file_buffer_data = ffi.new("uint8_t[?]", #file_data)
-ffi.copy(file_buffer_data, file_data, #file_data)
-local file_buffer = Buffer.New(file_buffer_data, #file_data)
-
-local img = png.decode(file_buffer)
-print(img)
-
-do return end
-
-local image = renderer.device:CreateImage(
-	extent.width,
-	extent.height,
-	"R8G8B8A8_UNORM",
-	{"storage", "transfer_dst", "transfer_src"},
-	"device_local"
-)
-renderer:UploadToImage(image, data, extent.width, extent.height)
-
-local PushConstants = ffi.typeof([[
-	struct {
-		struct {
-			float r;
-			float g;
-			float b;
-		} color;
-		float alpha;
-	}
-]])
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
@@ -50,7 +17,35 @@ local renderer = Renderer.New(
 	}
 )
 local window_target = renderer:CreateWindowRenderTarget()
-
+local file = io.open("examples/vulkan/capsadmin.png", "rb")
+local file_data = file:read("*a")
+file:close()
+local file_buffer = Buffer.New(file_data, #file_data)
+local img = png.decode(file_buffer)
+local texture_image = renderer.device:CreateImage(
+	img.width,
+	img.height,
+	"R8G8B8A8_UNORM",
+	{"sampled", "transfer_dst", "transfer_src"},
+	"device_local"
+)
+renderer:UploadToImage(
+	texture_image,
+	img.buffer:GetBuffer(),
+	texture_image:GetWidth(),
+	texture_image:GetHeight()
+)
+local texture_view = texture_image:CreateView()
+local PushConstants = ffi.typeof([[
+	struct {
+		struct {
+			float r;
+			float g;
+			float b;
+		} color;
+		float alpha;
+	}
+]])
 local texture_sampler = renderer.device:CreateSampler(
 	{
 		min_filter = "nearest",
@@ -68,23 +63,23 @@ local vertex_buffer = renderer:CreateBuffer(
 			-0.5, -- x
 			-0.5, -- y
 			1.0, -- r
-			0.0, -- g
-			0.0, -- b
+			1.0, -- g
+			1.0, -- b
 			0.0, -- u
 			0.0, -- v
 			-- top-right (green) + UV (1, 0)
 			0.5,
 			-0.5,
-			0.0,
 			1.0,
-			0.0,
+			1.0,
+			1.0,
 			1.0,
 			0.0,
 			-- bottom-right (blue) + UV (1, 1)
 			0.5,
 			0.5,
-			0.0,
-			0.0,
+			1.0,
+			1.0,
 			1.0,
 			1.0,
 			1.0,
@@ -93,7 +88,7 @@ local vertex_buffer = renderer:CreateBuffer(
 			0.5,
 			1.0,
 			1.0,
-			0.0,
+			1.0,
 			0.0,
 			1.0,
 		},
@@ -128,13 +123,13 @@ local graphics_pipeline = renderer:CreatePipeline(
 					layout(location = 1) in vec3 in_color;
 					layout(location = 2) in vec2 in_uv;
 
-					layout(location = 0) out vec3 frag_color;
-					layout(location = 1) out vec2 frag_uv;
+					layout(location = 0) out vec3 out_color;
+					layout(location = 1) out vec2 out_uv;
 
 					void main() {
 						gl_Position = vec4(in_position, 0.0, 1.0);
-						frag_color = in_color;
-						frag_uv = in_uv;
+						out_color = in_color;
+						out_uv = in_uv;
 					}
 				]],
 				bindings = {
@@ -194,7 +189,7 @@ local graphics_pipeline = renderer:CreatePipeline(
 
 					void main() {
 						vec4 tex_color = texture(tex_sampler, frag_uv);
-						out_color.rgb = frag_color * pc.color_multiplier * ubo1.color_multiplier * tex_color.rgb;
+						out_color.rgb = tex_color.rgb * frag_color * pc.color_multiplier * ubo1.color_multiplier;
 						out_color.a = pc.alpha * tex_color.a;
 					}
 				]],
@@ -205,7 +200,7 @@ local graphics_pipeline = renderer:CreatePipeline(
 						args = {
 							renderer:CreateBuffer(
 								{
-									byte_size = Color().ByteSize,
+									byte_size = 16, -- vec3 in std140 layout has 16-byte alignment
 									buffer_usage = "uniform_buffer",
 									data = Color(1.0, 1.0, 1.0),
 								}
@@ -215,7 +210,7 @@ local graphics_pipeline = renderer:CreatePipeline(
 					{
 						type = "combined_image_sampler",
 						binding_index = 1,
-						args = {offscreen_target:GetImageView(), texture_sampler},
+						args = {texture_view, texture_sampler},
 					},
 				},
 				push_constants = {
@@ -291,7 +286,7 @@ while true do
 		local extent = window_target:GetExtent()
 		local pc_data = PushConstants()
 		pc_data.color = Color.FromHSV((os.clock() % 10) / 10, 1.0, 1.0):Cast(pc_data.color)
-		pc_data.alpha = math.abs(math.sin(os.clock() * 0.5))
+		pc_data.alpha = 1 --math.abs(math.sin(os.clock() * 0.5))
 		graphics_pipeline:PushConstants(cmd, "fragment", 0, pc_data)
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
 		cmd:SetScissor(0, 0, extent.width, extent.height)
@@ -301,8 +296,6 @@ while true do
 		cmd:EndRenderPass()
 		window_target:EndFrame()
 	end
-
-	if frame_count % 30 == 0 then update_noise_texture() end
 
 	threads.sleep(1)
 	frame_count = frame_count + 1

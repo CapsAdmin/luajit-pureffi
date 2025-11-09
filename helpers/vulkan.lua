@@ -875,12 +875,7 @@ do -- instance
 
 					function CommandBuffer:BindIndexBuffer(buffer, offset, indexType)
 						indexType = indexType or "uint32"
-						lib.vkCmdBindIndexBuffer(
-							self.ptr[0],
-							buffer.ptr[0],
-							offset,
-							enums.VK_INDEX_TYPE_(indexType)
-						)
+						lib.vkCmdBindIndexBuffer(self.ptr[0], buffer.ptr[0], offset, enums.VK_INDEX_TYPE_(indexType))
 					end
 
 					function CommandBuffer:DrawIndexed(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance)
@@ -1623,6 +1618,14 @@ do -- instance
 					)
 				end
 
+				function Image:GetWidth()
+					return self.width
+				end
+
+				function Image:GetHeight()
+					return self.height
+				end
+
 				function Image:CreateView()
 					return self.device:CreateImageView(self.ptr[0], self.format)
 				end
@@ -1924,12 +1927,24 @@ do -- instance
 							{
 								colorWriteMask = enums.VK_COLOR_COMPONENT_(color_blend_attachment.color_write_mask or {"R", "G", "B", "A"}),
 								blendEnable = color_blend_attachment.blend or 0,
-								srcColorBlendFactor = color_blend_attachment.src_color_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.src_color_blend_factor) or enums.VK_BLEND_FACTOR_("one"),
-								dstColorBlendFactor = color_blend_attachment.dst_color_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.dst_color_blend_factor) or enums.VK_BLEND_FACTOR_("zero"),
-								colorBlendOp = color_blend_attachment.color_blend_op and enums.VK_BLEND_OP_(color_blend_attachment.color_blend_op) or enums.VK_BLEND_OP_("add"),
-								srcAlphaBlendFactor = color_blend_attachment.src_alpha_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.src_alpha_blend_factor) or enums.VK_BLEND_FACTOR_("one"),
-								dstAlphaBlendFactor = color_blend_attachment.dst_alpha_blend_factor and enums.VK_BLEND_FACTOR_(color_blend_attachment.dst_alpha_blend_factor) or enums.VK_BLEND_FACTOR_("zero"),
-								alphaBlendOp = color_blend_attachment.alpha_blend_op and enums.VK_BLEND_OP_(color_blend_attachment.alpha_blend_op) or enums.VK_BLEND_OP_("add"),
+								srcColorBlendFactor = color_blend_attachment.src_color_blend_factor and
+									enums.VK_BLEND_FACTOR_(color_blend_attachment.src_color_blend_factor) or
+									enums.VK_BLEND_FACTOR_("one"),
+								dstColorBlendFactor = color_blend_attachment.dst_color_blend_factor and
+									enums.VK_BLEND_FACTOR_(color_blend_attachment.dst_color_blend_factor) or
+									enums.VK_BLEND_FACTOR_("zero"),
+								colorBlendOp = color_blend_attachment.color_blend_op and
+									enums.VK_BLEND_OP_(color_blend_attachment.color_blend_op) or
+									enums.VK_BLEND_OP_("add"),
+								srcAlphaBlendFactor = color_blend_attachment.src_alpha_blend_factor and
+									enums.VK_BLEND_FACTOR_(color_blend_attachment.src_alpha_blend_factor) or
+									enums.VK_BLEND_FACTOR_("one"),
+								dstAlphaBlendFactor = color_blend_attachment.dst_alpha_blend_factor and
+									enums.VK_BLEND_FACTOR_(color_blend_attachment.dst_alpha_blend_factor) or
+									enums.VK_BLEND_FACTOR_("zero"),
+								alphaBlendOp = color_blend_attachment.alpha_blend_op and
+									enums.VK_BLEND_OP_(color_blend_attachment.alpha_blend_op) or
+									enums.VK_BLEND_OP_("add"),
 							}
 						)
 					end

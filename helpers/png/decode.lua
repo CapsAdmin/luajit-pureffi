@@ -156,6 +156,28 @@ local function bitFromColorType(colorType)
 	error("Invalid colortype")
 end
 
+-- Get the list of fields that should be filtered based on color type
+local function getFilteredFields(colorType)
+	if colorType == 0 then
+		-- Grayscale
+		return {"R", "G", "B"} -- R=G=B for grayscale, but we still filter all three
+	elseif colorType == 2 then
+		-- RGB (no alpha in PNG data)
+		return {"R", "G", "B"}
+	elseif colorType == 3 then
+		-- Indexed (palette)
+		return {"R", "G", "B"}
+	elseif colorType == 4 then
+		-- Grayscale + Alpha
+		return {"R", "G", "B", "A"}
+	elseif colorType == 6 then
+		-- RGBA
+		return {"R", "G", "B", "A"}
+	end
+
+	error("Invalid colortype")
+end
+
 local function paethPredict(a, b, c)
 	local p = a + b - c
 	local varA = math.abs(p - a)
@@ -190,6 +212,7 @@ local function getPixelRow(buffer, depth, colorType, palette, length)
 	local bpp = math.floor(depth / 8) * bitFromColorType(colorType)
 	local bpl = bpp * length
 	local filterType = buffer:ReadByte()
+	local filteredFields = getFilteredFields(colorType)
 
 	if filterType == 0 then
 		for x = 1, length do
@@ -205,9 +228,9 @@ local function getPixelRow(buffer, depth, colorType, palette, length)
 		for x = 1, length do
 			curPixel = makePixel(buffer, depth, colorType, palette)
 			lastPixel = pixelRow[x - 1]
-			newPixel = {}
-
-			for fieldName, curByte in pairs(curPixel) do
+			newPixel = {A = curPixel.A} -- Preserve alpha (255 for RGB images)
+			for _, fieldName in ipairs(filteredFields) do
+				local curByte = curPixel[fieldName]
 				lastByte = lastPixel and lastPixel[fieldName] or 0
 				newPixel[fieldName] = (curByte + lastByte) % 256
 			end
@@ -219,9 +242,9 @@ local function getPixelRow(buffer, depth, colorType, palette, length)
 		for x = 1, length do
 			local curPixel = makePixel(buffer, depth, colorType, palette)
 			local abovePixel = prevPixelRow[x]
-			local newPixel = {}
-
-			for fieldName, curByte in pairs(curPixel) do
+			newPixel = {A = curPixel.A} -- Preserve alpha (255 for RGB images)
+			for _, fieldName in ipairs(filteredFields) do
+				local curByte = curPixel[fieldName]
 				local aboveByte = abovePixel and abovePixel[fieldName] or 0
 				newPixel[fieldName] = (curByte + aboveByte) % 256
 			end
@@ -234,9 +257,9 @@ local function getPixelRow(buffer, depth, colorType, palette, length)
 			local curPixel = makePixel(buffer, depth, colorType, palette)
 			local lastPixel = pixelRow[x - 1]
 			local abovePixel = prevPixelRow[x]
-			local newPixel = {}
-
-			for fieldName, curByte in pairs(curPixel) do
+			newPixel = {A = curPixel.A} -- Preserve alpha (255 for RGB images)
+			for _, fieldName in ipairs(filteredFields) do
+				local curByte = curPixel[fieldName]
 				local lastByte = lastPixel and lastPixel[fieldName] or 0
 				local aboveByte = abovePixel and abovePixel[fieldName] or 0
 				local avgByte = math.floor((lastByte + aboveByte) / 2)
@@ -252,9 +275,9 @@ local function getPixelRow(buffer, depth, colorType, palette, length)
 			local lastPixel = pixelRow[x - 1]
 			local abovePixel = prevPixelRow[x]
 			local upperLeftPixel = prevPixelRow[x - 1]
-			local newPixel = {}
-
-			for fieldName, curByte in pairs(curPixel) do
+			newPixel = {A = curPixel.A} -- Preserve alpha (255 for RGB images)
+			for _, fieldName in ipairs(filteredFields) do
+				local curByte = curPixel[fieldName]
 				local lastByte = lastPixel and lastPixel[fieldName] or 0
 				local aboveByte = abovePixel and abovePixel[fieldName] or 0
 				local upperLeftByte = upperLeftPixel and upperLeftPixel[fieldName] or 0
@@ -314,6 +337,7 @@ local function pngImage(inputBuffer, progCallback, verbose)
 	end
 
 	local pixelDataBuffer = result
+	pixelDataBuffer:SetPosition(0)
 	printV("Decompressed buffer size: " .. pixelDataBuffer:GetSize())
 	printV("Creating pixelmap...")
 	-- Create output buffer for RGBA pixels (4 bytes per pixel)
