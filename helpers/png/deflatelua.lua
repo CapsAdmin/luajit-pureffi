@@ -11,7 +11,6 @@ local print = print
 local require = require
 local tostring = tostring
 local type = type
-local setmetatable = setmetatable
 local io = io
 local math = math
 local table_sort = table.sort
@@ -142,6 +141,29 @@ local function msb(bits, nbits)
 	return res
 end
 
+local function huffman_table_read(look, minbits, buf)
+	local code = 1 -- leading 1 marker
+	local nbits = 0
+
+	while 1 do
+		if nbits == 0 then -- small optimization (optional)
+			local bits = noeof(buf:ReadBits(minbits))
+			code = 2 ^ minbits + msb(bits, minbits)
+			nbits = nbits + minbits
+		else
+			local b = noeof(buf:ReadBits(1))
+			nbits = nbits + 1
+			code = code * 2 + b -- MSB first
+		end
+
+		--debug('code?', code, bits_tostring(code))
+		local val = look[code]
+
+		if val then --debug('FOUND', val)
+		return val end
+	end
+end
+
 local function HuffmanTable(init, is_full)
 	local t = {}
 
@@ -196,30 +218,18 @@ local function HuffmanTable(init, is_full)
 	-- debug(':', o.nbits, o.val)
 	--end
 	-- function t:lookup(bits) return look[bits] end
-	function t:read(buf)
-		local code = 1 -- leading 1 marker
-		local nbits = 0
-
-		while 1 do
-			if nbits == 0 then -- small optimization (optional)
-				local bits = noeof(buf:ReadBits(minbits))
-				code = 2 ^ minbits + msb(bits, minbits)
-				nbits = nbits + minbits
-			else
-				local b = noeof(buf:ReadBits(1))
-				nbits = nbits + 1
-				code = code * 2 + b -- MSB first
-			end
-
-			--debug('code?', code, bits_tostring(code))
-			local val = look[code]
-
-			if val then --debug('FOUND', val)
-			return val end
-		end
-	end
-
+	-- Store look and minbits in the table itself for use by huffman_table_read
+	t.look = look
+	t.minbits = minbits
 	return t
+end
+
+local function parse_zstring(buf)
+	repeat
+		local by = buf:ReadBits(8)
+
+		if not by then runtime_error("invalid header") end	
+	until by == 0
 end
 
 local function parse_gzip_header(buf)
@@ -258,14 +268,6 @@ local function parse_gzip_header(buf)
 		end
 
 		if not extra then runtime_error("invalid header") end
-	end
-
-	local function parse_zstring(buf)
-		repeat
-			local by = buf:ReadBits(8)
-
-			if not by then runtime_error("invalid header") end		
-		until by == 0
 	end
 
 	if hasbit(flg, FLG_FNAME) then parse_zstring(buf) end
@@ -313,6 +315,43 @@ local function parse_zlib_header(buf)
 	return window_size
 end
 
+local function decode_huffman_codes(buf, codelentable, ncodes)
+	local init = {}
+	local nbits
+	local val = 0
+
+	while val < ncodes do
+		local codelen = huffman_table_read(codelentable.look, codelentable.minbits, buf)
+		--FIX:check nil?
+		local nrepeat
+
+		if codelen <= 15 then
+			nrepeat = 1
+			nbits = codelen
+		--debug('w', nbits)
+		elseif codelen == 16 then
+			nrepeat = 3 + noeof(buf:ReadBits(2))
+		-- nbits unchanged
+		elseif codelen == 17 then
+			nrepeat = 3 + noeof(buf:ReadBits(3))
+			nbits = 0
+		elseif codelen == 18 then
+			nrepeat = 11 + noeof(buf:ReadBits(7))
+			nbits = 0
+		else
+			error("ASSERT")
+		end
+
+		for i = 1, nrepeat do
+			init[val] = nbits
+			val = val + 1
+		end
+	end
+
+	local huffmantable = HuffmanTable(init, true)
+	return huffmantable
+end
+
 local function parse_huffmantables(buf)
 	local hlit = buf:ReadBits(5) -- # of literal/length codes - 257
 	local hdist = buf:ReadBits(5) -- # of distance codes - 1
@@ -328,48 +367,10 @@ local function parse_huffmantables(buf)
 	end
 
 	local codelentable = HuffmanTable(codelen_init, true)
-
-	local function decode(ncodes)
-		local init = {}
-		local nbits
-		local val = 0
-
-		while val < ncodes do
-			local codelen = codelentable:read(buf)
-			--FIX:check nil?
-			local nrepeat
-
-			if codelen <= 15 then
-				nrepeat = 1
-				nbits = codelen
-			--debug('w', nbits)
-			elseif codelen == 16 then
-				nrepeat = 3 + noeof(buf:ReadBits(2))
-			-- nbits unchanged
-			elseif codelen == 17 then
-				nrepeat = 3 + noeof(buf:ReadBits(3))
-				nbits = 0
-			elseif codelen == 18 then
-				nrepeat = 11 + noeof(buf:ReadBits(7))
-				nbits = 0
-			else
-				error("ASSERT")
-			end
-
-			for i = 1, nrepeat do
-				init[val] = nbits
-				val = val + 1
-			end
-		end
-
-		local huffmantable = HuffmanTable(init, true)
-		return huffmantable
-	end
-
 	local nlit_codes = hlit + 257
 	local ndist_codes = hdist + 1
-	local littable = decode(nlit_codes)
-	local disttable = decode(ndist_codes)
+	local littable = decode_huffman_codes(buf, codelentable, nlit_codes)
+	local disttable = decode_huffman_codes(buf, codelentable, ndist_codes)
 	return littable, disttable
 end
 
@@ -379,7 +380,7 @@ local tdecode_dist_base
 local tdecode_dist_nextrabits
 
 local function parse_compressed_item(buf, outstate, littable, disttable)
-	local val = littable:read(buf)
+	local val = huffman_table_read(littable.look, littable.minbits, buf)
 
 	--debug("parse_compressed_item: val=", val, val < 256 and string_char(val) or "")
 	if val < 256 then -- literal
@@ -452,7 +453,7 @@ local function parse_compressed_item(buf, outstate, littable, disttable)
 		--for i=0,29 do debug('T4',i,t[i]) end
 		end
 
-		local dist_val = disttable:read(buf)
+		local dist_val = huffman_table_read(disttable.look, disttable.minbits, buf)
 		local dist_base = tdecode_dist_base[dist_val]
 		local dist_nextrabits = tdecode_dist_nextrabits[dist_val]
 		local dist_extrabits = noeof(buf:ReadBits(dist_nextrabits))
