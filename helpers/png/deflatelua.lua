@@ -6,14 +6,12 @@ local ffi = require("ffi")
 local assert = assert
 local error = error
 local ipairs = ipairs
-local pairs = pairs
 local print = print
 local require = require
 local tostring = tostring
 local type = type
 local io = io
 local math = math
-local table_sort = table.sort
 local math_max = math.max
 local string_char = string.char
 local band = bit.band
@@ -126,10 +124,6 @@ local function get_output_buffer(output, initial_size)
 	runtime_error("output must be Buffer or nil, got: " .. tostring(output_type))
 end
 
-local function sort(a, b)
-	return a.nbits == b.nbits and a.val < b.val or a.nbits < b.nbits
-end
-
 local function msb(bits, nbits)
 	local res = 0
 
@@ -164,14 +158,26 @@ local function huffman_table_read(look, minbits, buf)
 	end
 end
 
-local function HuffmanTable(init, is_full)
+local function HuffmanTable(init, ncodes)
 	local t = {}
 
-	if is_full then
-		for val, nbits in pairs(init) do
-			if nbits ~= 0 then
-				t[#t + 1] = {val = val, nbits = nbits}
-			--debug('*',val,nbits)
+	if ncodes then
+		-- Find max nbits to iterate over
+		local maxnbits = 0
+
+		for val = 0, ncodes - 1 do
+			local nbits = init[val]
+
+			if nbits and nbits > maxnbits then maxnbits = nbits end
+		end
+
+		-- Build table sorted by nbits first, then val (avoiding table.sort)
+		for nbits = 0, maxnbits do
+			for val = 0, ncodes - 1 do
+				if init[val] == nbits and nbits ~= 0 then
+					t[#t + 1] = {val = val, nbits = nbits}
+				--debug('*',val,nbits)
+				end
 			end
 		end
 	else
@@ -187,7 +193,6 @@ local function HuffmanTable(init, is_full)
 		end
 	end
 
-	table_sort(t, sort)
 	-- assign codes
 	local code = 1 -- leading 1 marker
 	local nbits = 0
@@ -348,8 +353,7 @@ local function decode_huffman_codes(buf, codelentable, ncodes)
 		end
 	end
 
-	local huffmantable = HuffmanTable(init, true)
-	return huffmantable
+	return HuffmanTable(init, ncodes)
 end
 
 local function parse_huffmantables(buf)
@@ -366,7 +370,7 @@ local function parse_huffmantables(buf)
 		codelen_init[val] = nbits
 	end
 
-	local codelentable = HuffmanTable(codelen_init, true)
+	local codelentable = HuffmanTable(codelen_init, 19) -- max value in codelen_vals is 18
 	local nlit_codes = hlit + 257
 	local ndist_codes = hdist + 1
 	local littable = decode_huffman_codes(buf, codelentable, nlit_codes)
@@ -589,8 +593,10 @@ function M.adler32(byte, crc)
 	local s2 = (crc - s1) / 65536
 	s1 = (s1 + byte) % 65521
 	s2 = (s2 + s1) % 65521
+	-- 65521 is the largest prime smaller than 2^16
 	return s2 * 65536 + s1
-end -- 65521 is the largest prime smaller than 2^16
+end
+
 function M.inflate_zlib(t)
 	local inbuf = get_input_buffer(t.input)
 	local outbuf = get_output_buffer(t.output)
