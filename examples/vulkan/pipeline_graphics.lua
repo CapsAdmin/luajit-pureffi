@@ -4,14 +4,17 @@ local threads = require("threads")
 local Renderer = require("helpers.renderer")
 local shaderc = require("shaderc")
 local wnd = cocoa.window()
-local RGBA = ffi.typeof("float[4]")
+local Color = require("helpers.structs.color")
 local PushConstants = ffi.typeof([[
 	struct {
-		float color[4];
+		struct {
+			float r;
+			float g;
+			float b;
+		} color;
 		float alpha;
 	}
 ]])
-
 local renderer = Renderer.New(
 	{
 		surface_handle = assert(wnd:GetMetalLayer()),
@@ -140,12 +143,11 @@ local function update_noise_texture()
 	offscreen_target:BeginFrame()
 	local cmd = offscreen_target:GetCommandBuffer()
 	noise_pipeline:GetUniformBuffer(0):CopyData(ffi.new("float[1]", math.random() * 1000.0))
-
 	cmd:BeginRenderPass(
 		offscreen_target:GetRenderPass(),
 		offscreen_target:GetFramebuffer(),
 		offscreen_target:GetExtent(),
-		RGBA(0, 0, 0, 1)
+		ffi.new("float[4]", 0.0, 0.0, 0.0, 1.0)
 	)
 	noise_pipeline:Bind(cmd)
 	local extent = offscreen_target:GetExtent()
@@ -158,7 +160,6 @@ local function update_noise_texture()
 end
 
 update_noise_texture()
-
 local texture_sampler = renderer.device:CreateSampler(
 	{
 		min_filter = "nearest",
@@ -212,8 +213,12 @@ local index_buffer = renderer:CreateBuffer(
 		buffer_usage = "index_buffer",
 		data_type = "uint32_t",
 		data = {
-			0, 1, 2, -- first triangle (top-left, top-right, bottom-right)
-			2, 3, 0, -- second triangle (bottom-right, bottom-left, top-left)
+			0,
+			1,
+			2, -- first triangle (top-left, top-right, bottom-right)
+			2,
+			3,
+			0, -- second triangle (bottom-right, bottom-left, top-left)
 		},
 	}
 )
@@ -279,11 +284,11 @@ local graphics_pipeline = renderer:CreatePipeline(
 					#version 450
 
 					layout(binding = 0) uniform ColorUniform1 {
-						vec4 color_multiplier;
+						vec3 color_multiplier;
 					} ubo1;
 
 					layout(push_constant) uniform PushConstants {
-						vec4 color_multiplier;
+						vec3 color_multiplier;
 						float alpha;
 					} pc;
 
@@ -298,8 +303,8 @@ local graphics_pipeline = renderer:CreatePipeline(
 
 					void main() {
 						vec4 tex_color = texture(tex_sampler, frag_uv);
-						out_color = vec4(frag_color, 1.0) * pc.color_multiplier * ubo1.color_multiplier * tex_color;
-						out_color.a *= pc.alpha;
+						out_color.rgb = frag_color * pc.color_multiplier * ubo1.color_multiplier * tex_color.rgb;
+						out_color.a = pc.alpha * tex_color.a;
 					}
 				]],
 				descriptor_sets = {
@@ -309,14 +314,13 @@ local graphics_pipeline = renderer:CreatePipeline(
 						args = {
 							renderer:CreateBuffer(
 								{
-									byte_size = ffi.sizeof(RGBA),
+									byte_size = Color().ByteSize,
 									buffer_usage = "uniform_buffer",
-									data = RGBA(1.0, 1.0, 1.0, 1.0),
+									data = Color(1.0, 1.0, 1.0),
 								}
 							),
 						},
 					},
-
 					{
 						type = "combined_image_sampler",
 						binding_index = 1,
@@ -370,35 +374,9 @@ local graphics_pipeline = renderer:CreatePipeline(
 )
 wnd:Initialize()
 wnd:OpenWindow()
-
-local function hsv_to_rgb(h, s, v)
-	local c = v * s
-	local x = c * (1 - math.abs((h * 6) % 2 - 1))
-	local m = v - c
-	local r, g, b
-	local h6 = h * 6
-
-	if h6 < 1 then
-		r, g, b = c, x, 0
-	elseif h6 < 2 then
-		r, g, b = x, c, 0
-	elseif h6 < 3 then
-		r, g, b = 0, c, x
-	elseif h6 < 4 then
-		r, g, b = 0, x, c
-	elseif h6 < 5 then
-		r, g, b = x, 0, c
-	else
-		r, g, b = c, 0, x
-	end
-
-	return r + m, g + m, b + m
-end
-
 local frame_count = 0
 
 while true do
-	
 	local events = wnd:ReadEvents()
 
 	for _, event in ipairs(events) do
@@ -416,15 +394,12 @@ while true do
 			window_target:GetRenderPass(),
 			window_target:GetFramebuffer(),
 			window_target:GetExtent(),
-			RGBA(0.2, 0.2, 0.2, 1.0)
+			ffi.new("float[4]", 0.2, 0.2, 0.2, 1.0)
 		)
 		graphics_pipeline:Bind(cmd)
 		local extent = window_target:GetExtent()
-
-		--graphics_pipeline:GetUniformBuffer(1):CopyData(RGBA(hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)))
 		local pc_data = PushConstants()
-		local r, g, b = hsv_to_rgb((os.clock() % 10) / 10, 1.0, 1.0)
-		pc_data.color[0], pc_data.color[1], pc_data.color[2], pc_data.color[3] = r, g, b, 1.0
+		pc_data.color = Color.FromHSV((os.clock() % 10) / 10, 1.0, 1.0):Cast(pc_data.color)
 		pc_data.alpha = math.abs(math.sin(os.clock() * 0.5))
 		graphics_pipeline:PushConstants(cmd, "fragment", 0, pc_data)
 		cmd:SetViewport(0.0, 0.0, extent.width, extent.height, 0.0, 1.0)
@@ -436,9 +411,7 @@ while true do
 		window_target:EndFrame()
 	end
 
-	if frame_count % 30 == 0 then
-		update_noise_texture()
-	end
+	if frame_count % 30 == 0 then update_noise_texture() end
 
 	threads.sleep(1)
 	frame_count = frame_count + 1
