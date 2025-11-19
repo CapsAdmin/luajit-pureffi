@@ -440,12 +440,17 @@ do
 			local worker_func = assert(load(ffi.string(control.worker_func, control.worker_func_len)))
 
 			-- Thread loop: wait for work, process it, repeat
+			-- Use adaptive sleep to reduce CPU usage while maintaining responsiveness
+			local idle_count = 0
 			while true do
 				-- Check if we should exit
 				if control.should_exit == 1 then break end
 
 				-- Check if work is available
 				if control.work_available == 1 then
+					-- Reset idle counter when work arrives
+					idle_count = 0
+					
 					-- Deserialize work data
 					local work = threads.pointer_decode(control.work_data, control.work_data_len)
 					-- Process it with the worker function
@@ -457,10 +462,13 @@ do
 					-- Mark as done
 					control.work_available = 0
 					control.work_done = 1
+				else
+					-- Adaptive sleep: increase sleep time when idle to reduce CPU usage
+					-- But keep it short enough to remain responsive
+					idle_count = idle_count + 1
+					local sleep_time = idle_count < 10 and 1 or (idle_count < 100 and 5 or 10)
+					threads.sleep(sleep_time)
 				end
-
-				-- Small sleep to avoid busy-waiting
-				threads.sleep(1)
 			end
 
 			return thread_id
@@ -496,8 +504,13 @@ do
 	function pool_meta:wait(thread_id)
 		local idx = thread_id - 1
 
+		-- Use adaptive sleep to reduce CPU usage during waiting
+		local idle_count = 0
 		while self.control[idx].work_done == 0 do
-			threads.sleep(1)
+			idle_count = idle_count + 1
+			-- Start with short sleep for responsiveness, increase if waiting long
+			local sleep_time = idle_count < 10 and 1 or (idle_count < 100 and 5 or 10)
+			threads.sleep(sleep_time)
 		end
 
 		return threads.pointer_decode(self.control[idx].result_data, self.control[idx].result_data_len)
